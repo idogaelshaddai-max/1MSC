@@ -1,0 +1,6 @@
+{
+  "name": "1 Million Naira Skill Challenge",
+  "description": "Mobile-first course learning portal by Elshaddai Idoga. Learn. Build. Get paid.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

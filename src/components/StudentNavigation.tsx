@@ -106,6 +106,18 @@ export function StudentNavigation({
               </a>
             )}
 
+            {/* Admin Switcher: STRICTLY visible only when logged in as verified administrator */}
+            {isAdmin && onOpenAdmin && (
+              <button
+                onClick={onOpenAdmin}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-colors shadow-sm cursor-pointer"
+                title="Open Admin Dashboard"
+              >
+                <Shield className="w-3.5 h-3.5" />
+                <span>Admin Dashboard</span>
+              </button>
+            )}
+
             {/* User Greeting & Sign Out */}
             <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
               <span className="hidden sm:inline text-xs text-slate-300 font-medium truncate max-w-[120px]">

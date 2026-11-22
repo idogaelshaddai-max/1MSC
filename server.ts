@@ -1,5 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
@@ -1389,6 +1390,21 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
+    app.get('*', async (req, res, next) => {
+      if (req.originalUrl.startsWith('/api/')) return next();
+      try {
+        const indexPath = path.resolve('index.html');
+        if (fs.existsSync(indexPath)) {
+          let template = fs.readFileSync(indexPath, 'utf-8');
+          template = await vite.transformIndexHtml(req.originalUrl, template);
+          res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+          return;
+        }
+        next();
+      } catch (e) {
+        next(e);
+      }
+    });
   }
 
   app.listen(Number(PORT), '0.0.0.0', () => {

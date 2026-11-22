@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Shield, ArrowRight } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext.js';
 import { AuthScreens } from './components/AuthScreens.js';
 import { StudentNavigation, type StudentNavTab } from './components/StudentNavigation.js';
@@ -13,43 +14,21 @@ import type { DashboardStats } from './types/index.js';
 function MainApp() {
   const { user, token, isLoading, isAdmin, refreshUser } = useAuth();
   const [activeTab, setActiveTab] = useState<StudentNavTab>('home');
-  const [viewMode, setViewMode] = useState<'student' | 'admin'>(() => {
-    if (typeof window !== 'undefined') {
-      const path = window.location.pathname.toLowerCase();
-      const params = new URLSearchParams(window.location.search);
-      if (
-        path === '/admin' ||
-        path.startsWith('/admin/') ||
-        params.get('admin') === 'true' ||
-        params.get('view') === 'admin'
-      ) {
-        return 'admin';
-      }
-      const saved = sessionStorage.getItem('preferred_view_mode');
-      if (saved === 'admin') return 'admin';
-    }
-    return 'student';
-  });
+  const [viewMode, setViewMode] = useState<'student' | 'admin'>('student');
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [selectedLessonId, setSelectedLessonId] = useState<string | undefined>(undefined);
   const [selectedModuleId, setSelectedModuleId] = useState<string | undefined>(undefined);
 
-  // Sync URL route with viewMode for admins
+  // Automatically place administrators in the Admin Dashboard by default
   useEffect(() => {
     if (isAdmin) {
-      const path = window.location.pathname.toLowerCase();
-      const params = new URLSearchParams(window.location.search);
-      const isExplicitAdminUrl =
-        path === '/admin' ||
-        path.startsWith('/admin/') ||
-        params.get('admin') === 'true' ||
-        params.get('view') === 'admin';
-      if (isExplicitAdminUrl && viewMode !== 'admin') {
+      const explicitStudentPreview = sessionStorage.getItem('preferred_view_mode') === 'student';
+      if (!explicitStudentPreview) {
         setViewMode('admin');
       }
     }
-  }, [isAdmin, viewMode]);
+  }, [isAdmin, user]);
 
   // Global Admin Keyboard Shortcut: Ctrl + Shift + A or Cmd + Shift + A
   useEffect(() => {
@@ -144,6 +123,23 @@ function MainApp() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
+      {/* Admin Preview Mode Top Bar: ONLY visible when logged in as an administrator */}
+      {isAdmin && (
+        <div className="bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md border-b border-amber-600">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-slate-950" />
+            <span>Admin Preview Mode: You are previewing the student view.</span>
+          </div>
+          <button
+            onClick={openAdminView}
+            className="px-3.5 py-1 rounded-lg bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-sm transition-all"
+          >
+            <span>Return to Admin Dashboard</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       <StudentNavigation
         activeTab={activeTab}
         onTabChange={(tab) => {
@@ -156,6 +152,7 @@ function MainApp() {
             fetchDashboardStats();
           }
         }}
+        onOpenAdmin={isAdmin ? openAdminView : undefined}
         whatsappUrl={dashboardStats?.whatsappUrl}
         xp={dashboardStats?.student?.xp || user.xp || 0}
       />

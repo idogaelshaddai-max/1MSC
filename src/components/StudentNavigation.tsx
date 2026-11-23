@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, BookOpen, Award, Gift, LogOut, Shield, MessageCircle } from 'lucide-react';
+import { Home, BookOpen, Award, Gift, LogOut, MessageCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.js';
 import cashLogo from '../assets/images/cash_bundle_logo_1793025947722.jpg';
 
@@ -8,7 +8,6 @@ export type StudentNavTab = 'home' | 'learning' | 'certificate' | 'bonuses';
 interface StudentNavigationProps {
   activeTab: StudentNavTab;
   onTabChange: (tab: StudentNavTab) => void;
-  onOpenAdmin?: () => void;
   whatsappUrl?: string;
   xp?: number;
 }
@@ -16,11 +15,10 @@ interface StudentNavigationProps {
 export function StudentNavigation({
   activeTab,
   onTabChange,
-  onOpenAdmin,
   whatsappUrl,
   xp = 0,
 }: StudentNavigationProps) {
-  const { user, isAdmin, logout } = useAuth();
+  const { user, logout } = useAuth();
 
   // STRICT ORDER REQUIRED BY SPECIFICATION:
   // 1. Home
@@ -104,18 +102,6 @@ export function StudentNavigation({
                 <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Support Group</span>
               </a>
-            )}
-
-            {/* Admin Switcher: STRICTLY visible only when logged in as verified administrator */}
-            {isAdmin && onOpenAdmin && (
-              <button
-                onClick={onOpenAdmin}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-colors shadow-sm cursor-pointer"
-                title="Open Admin Dashboard"
-              >
-                <Shield className="w-3.5 h-3.5" />
-                <span>Admin Dashboard</span>
-              </button>
             )}
 
             {/* User Greeting & Sign Out */}

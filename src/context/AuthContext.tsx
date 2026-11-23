@@ -120,6 +120,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     authStorage.clearToken();
+    try {
+      sessionStorage.removeItem('preferred_view_mode');
+      if (window.location.pathname.startsWith('/admin')) {
+        window.history.replaceState(null, '', '/');
+      }
+    } catch {
+      // Ignore history/storage errors
+    }
     setToken(null);
     setUser(null);
     setIsDeactivated(false);

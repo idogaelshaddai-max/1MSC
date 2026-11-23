@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { Shield, ArrowRight } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext.js';
 import { AuthScreens } from './components/AuthScreens.js';
@@ -7,12 +7,15 @@ import { HomeView } from './components/HomeView.js';
 import { LearningView } from './components/LearningView.js';
 import { CertificateView } from './components/CertificateView.js';
 import { BonusVaultView } from './components/BonusVaultView.js';
-import { AdminDashboardView } from './components/AdminDashboardView.js';
 import { api } from './lib/api.js';
 import type { DashboardStats } from './types/index.js';
 
+const AdminDashboardView = lazy(() =>
+  import('./components/AdminDashboardView.js').then((mod) => ({ default: mod.AdminDashboardView }))
+);
+
 function MainApp() {
-  const { user, token, isLoading, isAdmin, refreshUser } = useAuth();
+  const { user, token, isLoading, isAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState<StudentNavTab>('home');
   const [viewMode, setViewMode] = useState<'student' | 'admin'>('student');
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
@@ -20,12 +23,29 @@ function MainApp() {
   const [selectedLessonId, setSelectedLessonId] = useState<string | undefined>(undefined);
   const [selectedModuleId, setSelectedModuleId] = useState<string | undefined>(undefined);
 
-  // Automatically place administrators in the Admin Dashboard by default
+  // Enforce strict role separation and /admin route handling
   useEffect(() => {
-    if (isAdmin) {
-      const explicitStudentPreview = sessionStorage.getItem('preferred_view_mode') === 'student';
-      if (!explicitStudentPreview) {
-        setViewMode('admin');
+    if (!user) {
+      setViewMode('student');
+      return;
+    }
+
+    const onAdminPath = window.location.pathname.startsWith('/admin');
+
+    if (!isAdmin) {
+      setViewMode('student');
+      if (onAdminPath) {
+        window.history.replaceState(null, '', '/');
+      }
+      return;
+    }
+
+    const explicitStudentPreview = sessionStorage.getItem('preferred_view_mode') === 'student';
+    if (onAdminPath || !explicitStudentPreview) {
+      setViewMode('admin');
+      sessionStorage.setItem('preferred_view_mode', 'admin');
+      if (!onAdminPath) {
+        window.history.replaceState(null, '', '/admin');
       }
     }
   }, [isAdmin, user]);
@@ -40,11 +60,7 @@ function MainApp() {
         setViewMode((prev) => {
           const next = prev === 'admin' ? 'student' : 'admin';
           sessionStorage.setItem('preferred_view_mode', next);
-          if (next === 'admin') {
-            window.history.replaceState(null, '', '/admin');
-          } else {
-            window.history.replaceState(null, '', '/');
-          }
+          window.history.replaceState(null, '', next === 'admin' ? '/admin' : '/');
           return next;
         });
       }
@@ -104,9 +120,16 @@ function MainApp() {
   // Admin View (Protected: requires verified isAdmin)
   if (viewMode === 'admin' && isAdmin) {
     return (
-      <AdminDashboardView
-        onBackToStudentView={closeAdminView}
-      />
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 space-y-3">
+            <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs font-semibold text-slate-300">Loading Admin Dashboard...</p>
+          </div>
+        }
+      >
+        <AdminDashboardView onBackToStudentView={closeAdminView} />
+      </Suspense>
     );
   }
 
@@ -123,7 +146,7 @@ function MainApp() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
-      {/* Admin Preview Mode Top Bar: ONLY visible when logged in as an administrator */}
+      {/* Admin Preview Mode Top Bar: ONLY visible when an administrator previews the student view */}
       {isAdmin && (
         <div className="bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md border-b border-amber-600">
           <div className="flex items-center gap-2">
@@ -152,7 +175,6 @@ function MainApp() {
             fetchDashboardStats();
           }
         }}
-        onOpenAdmin={isAdmin ? openAdminView : undefined}
         whatsappUrl={dashboardStats?.whatsappUrl}
         xp={dashboardStats?.student?.xp || user.xp || 0}
       />
@@ -188,19 +210,8 @@ function MainApp() {
         {activeTab === 'bonuses' && <BonusVaultView />}
       </main>
 
-      {/* Footer: clean copyright for students; subtle admin link only if logged in as admin */}
       <footer className="py-6 px-4 text-center text-xs text-slate-500 border-t border-slate-200/60 bg-white">
         <p>© {new Date().getFullYear()} 1 Million Naira Skill Challenge by Elshaddai Idoga. All rights reserved.</p>
-        {isAdmin && (
-          <p className="mt-1 text-[11px] text-slate-400">
-            <button
-              onClick={openAdminView}
-              className="hover:text-amber-600 underline cursor-pointer"
-            >
-              Admin Dashboard (or press Ctrl + Shift + A)
-            </button>
-          </p>
-        )}
       </footer>
     </div>
   );

@@ -1,9 +1,10 @@
 import React from 'react';
-import { Home, BookOpen, Award, Gift, LogOut, MessageCircle } from 'lucide-react';
+import { Home, BookOpen, Award, Gift, LogOut, MessageCircle, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.js';
+import { sanitizeExternalUrl } from '../lib/url.js';
 import cashLogo from '../assets/images/cash_bundle_logo_1793025947722.jpg';
 
-export type StudentNavTab = 'home' | 'learning' | 'certificate' | 'bonuses';
+export type StudentNavTab = 'home' | 'learning' | 'certificate' | 'bonuses' | 'profile';
 
 interface StudentNavigationProps {
   activeTab: StudentNavTab;
@@ -19,12 +20,9 @@ export function StudentNavigation({
   xp = 0,
 }: StudentNavigationProps) {
   const { user, logout } = useAuth();
+  const safeWhatsappUrl = sanitizeExternalUrl(whatsappUrl);
 
-  // STRICT ORDER REQUIRED BY SPECIFICATION:
-  // 1. Home
-  // 2. My Learning
-  // 3. Certificate
-  // 4. Bonus Vault
+  // Primary 4 student curriculum tabs in strict order
   const navItems = [
     { id: 'home' as const, label: 'Home', icon: Home },
     { id: 'learning' as const, label: 'My Learning', icon: BookOpen },
@@ -36,8 +34,8 @@ export function StudentNavigation({
     <>
       {/* DESKTOP & TABLET TOP BAR */}
       <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 text-white shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
-          {/* Zone 1: Brand Wordmark with Cash Bundle Picture */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4 sm:gap-8">
+          {/* Brand Wordmark */}
           <div className="flex items-center gap-3 shrink-0">
             <div className="w-9 h-9 rounded-lg overflow-hidden border border-amber-500/50 shadow-md shrink-0 bg-slate-950 flex items-center justify-center">
               <img
@@ -60,7 +58,7 @@ export function StudentNavigation({
             </button>
           </div>
 
-          {/* Zone 2: Student Nav Links (Strict order: Home, My Learning, Certificate, Bonus Vault) */}
+          {/* Primary Student Nav Links */}
           <nav className="hidden md:flex items-center gap-1 sm:gap-2">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -82,18 +80,16 @@ export function StudentNavigation({
             })}
           </nav>
 
-          {/* Zone 3: Student Details & Actions */}
-          <div className="flex items-center gap-3 shrink-0">
-            {/* XP Pill */}
+          {/* Student Profile, XP, Support & Sign Out */}
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
             <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-950/40 border border-amber-700/50 text-amber-300 text-xs font-medium tabular-nums">
               <span className="font-bold text-amber-400">{xp}</span>
               <span className="text-[10px] text-amber-300/80 uppercase">XP</span>
             </div>
 
-            {/* WhatsApp Support Link if supplied */}
-            {whatsappUrl && (
+            {safeWhatsappUrl && (
               <a
-                href={whatsappUrl}
+                href={safeWhatsappUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 title="WhatsApp Support Group"
@@ -104,13 +100,27 @@ export function StudentNavigation({
               </a>
             )}
 
-            {/* User Greeting & Sign Out */}
-            <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
-              <span className="hidden sm:inline text-xs text-slate-300 font-medium truncate max-w-[120px]">
-                {user?.fullName?.split(' ')[0] || 'Student'}
-              </span>
+            <div className="flex items-center gap-1.5 pl-2 border-l border-slate-800">
               <button
-                onClick={logout}
+                type="button"
+                onClick={() => onTabChange('profile')}
+                title="Student Profile & Password"
+                aria-label="Open Student Profile"
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  activeTab === 'profile'
+                    ? 'bg-amber-400/15 text-amber-400 border border-amber-400/30'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <User className="w-4 h-4 shrink-0" />
+                <span className="hidden sm:inline truncate max-w-[110px]">
+                  {user?.fullName?.split(' ')[0] || 'Profile'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => logout()}
                 title="Sign out of portal"
                 className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                 aria-label="Sign Out"
@@ -122,7 +132,7 @@ export function StudentNavigation({
         </div>
       </header>
 
-      {/* MOBILE FIXED BOTTOM TAB BAR (Strict 4-tab contract in mandated order) */}
+      {/* MOBILE FIXED BOTTOM TAB BAR (Strict 4-tab contract) */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 px-2 py-1 shadow-lg">
         <div className="grid grid-cols-4 items-center h-14">
           {navItems.map((item) => {

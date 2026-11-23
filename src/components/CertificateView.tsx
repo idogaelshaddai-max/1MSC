@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Award, Lock, CheckCircle2, AlertCircle, ExternalLink, ArrowRight } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { sanitizeExternalUrl } from '../lib/url.js';
 import type { CertificateStatus } from '../types/index.js';
 import certImg from '../assets/images/certificate_gold_seal_1793022390696.jpg';
 
@@ -29,14 +30,6 @@ export function CertificateView({ onNavigateToLesson }: CertificateViewProps) {
   useEffect(() => {
     fetchStatus();
   }, []);
-
-  const handleOpenCertificateRequest = () => {
-    if (!status || !status.eligible) return;
-
-    if (status.certificateRequestUrl && status.certificateRequestUrl.trim()) {
-      window.open(status.certificateRequestUrl, '_blank', 'noopener,noreferrer');
-    }
-  };
 
   if (loading) {
     return (
@@ -159,19 +152,24 @@ export function CertificateView({ onNavigateToLesson }: CertificateViewProps) {
             {/* ACTION BUTTON AREA */}
             <div className="pt-4 border-t border-slate-100">
               {eligible ? (
-                certificateRequestUrl && certificateRequestUrl.trim() ? (
-                  <button
-                    onClick={handleOpenCertificateRequest}
-                    className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs uppercase tracking-wider transition-all shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Request Official Certificate</span>
-                    <ExternalLink className="w-4 h-4" />
-                  </button>
-                ) : (
-                  <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 text-amber-900 text-xs font-medium text-center">
-                    Certificate request link will be added soon by the instructor.
-                  </div>
-                )
+                (() => {
+                  const safeCertUrl = sanitizeExternalUrl(certificateRequestUrl);
+                  return safeCertUrl ? (
+                    <a
+                      href={safeCertUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full min-h-[48px] px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs uppercase tracking-wider transition-all shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <span>Request Official Certificate</span>
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  ) : (
+                    <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 text-amber-900 text-xs font-medium text-center">
+                      Certificate request link will be added soon by the instructor.
+                    </div>
+                  );
+                })()
               ) : (
                 <div className="space-y-2">
                   <button

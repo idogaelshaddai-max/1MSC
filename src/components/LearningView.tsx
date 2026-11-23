@@ -19,6 +19,7 @@ import {
   PlayCircle,
 } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { sanitizeExternalUrl } from '../lib/url.js';
 
 interface LearningViewProps {
   initialLessonId?: string;
@@ -650,29 +651,33 @@ export function LearningView({
               )}
 
               {/* DOWNLOADABLE RESOURCE LINK */}
-              {currentLesson.downloadableResourceUrl && (
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 shrink-0">
-                      <Download className="w-5 h-5" />
+              {(() => {
+                const safeResourceUrl = sanitizeExternalUrl(currentLesson.downloadableResourceUrl);
+                if (!safeResourceUrl) return null;
+                return (
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 shrink-0">
+                        <Download className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900">Lesson Resource & Templates</p>
+                        <p className="text-[11px] text-slate-500 truncate max-w-xs sm:max-w-md">
+                          {safeResourceUrl}
+                        </p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-900">Lesson Resource & Templates</p>
-                      <p className="text-[11px] text-slate-500 truncate max-w-xs sm:max-w-md">
-                        {currentLesson.downloadableResourceUrl}
-                      </p>
-                    </div>
+                    <a
+                      href={safeResourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white text-xs font-semibold whitespace-nowrap transition-colors"
+                    >
+                      Open Resource
+                    </a>
                   </div>
-                  <a
-                    href={currentLesson.downloadableResourceUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3.5 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white text-xs font-semibold whitespace-nowrap transition-colors"
-                  >
-                    Open Resource
-                  </a>
-                </div>
-              )}
+                );
+              })()}
 
               {/* COMPLETION BUTTON & NOTICE */}
               <div className="pt-4 border-t border-slate-200/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">

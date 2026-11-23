@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getSupabaseAdminClient } from './supabase.js';
+import { getSupabaseAdminClient, getSupabaseConfigError } from './supabase.js';
 import type {
   User,
   CourseModule,
@@ -40,7 +40,9 @@ interface DatabaseSchema {
   }>;
 }
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const IS_STRICT_PRODUCTION = process.env.NODE_ENV === 'production' || IS_VERCEL;
+const DATA_DIR = IS_VERCEL ? path.join('/tmp', '1m-challenge-data') : path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const DEFAULT_SETTINGS: CourseSettings = {
@@ -434,6 +436,48 @@ export class Database {
     return this.supabaseReady && getSupabaseAdminClient() !== null;
   }
 
+  public async checkStorageHealth(): Promise<{
+    healthy: boolean;
+    mode: 'supabase' | 'local' | 'unconfigured';
+    error?: string;
+  }> {
+    const client = getSupabaseAdminClient();
+    if (!client) {
+      const cfgErr = getSupabaseConfigError();
+      if (IS_STRICT_PRODUCTION) {
+        return {
+          healthy: false,
+          mode: 'unconfigured',
+          error: cfgErr || 'Supabase environment variables are not configured.',
+        };
+      }
+      return {
+        healthy: true,
+        mode: 'local',
+        error: cfgErr || undefined,
+      };
+    }
+
+    try {
+      const ready = await this.getSupabase();
+      if (ready) {
+        return { healthy: true, mode: 'supabase' };
+      }
+    } catch (err: any) {
+      return {
+        healthy: false,
+        mode: 'unconfigured',
+        error: err?.message || 'Supabase connection check failed.',
+      };
+    }
+
+    return {
+      healthy: !IS_STRICT_PRODUCTION,
+      mode: IS_STRICT_PRODUCTION ? 'unconfigured' : 'local',
+      error: this.supabaseFallbackReason || undefined,
+    };
+  }
+
   private getLocalData(): DatabaseSchema {
     if (!this.localData) {
       this.localData = this.loadLocalDatabase();
@@ -443,11 +487,22 @@ export class Database {
 
   private async getSupabase(): Promise<SupabaseClient | null> {
     const client = getSupabaseAdminClient();
-    if (!client) return null;
+    if (!client) {
+      if (IS_STRICT_PRODUCTION) {
+        throw new Error(
+          getSupabaseConfigError() ||
+            'Persistent Supabase database is not configured in production. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+        );
+      }
+      return null;
+    }
     if (this.supabaseReady) return client;
 
     const now = Date.now();
     if (this.supabaseFallbackReason && now - this.lastSupabaseCheckAt < 15000) {
+      if (IS_STRICT_PRODUCTION) {
+        throw new Error(`Database unavailable: ${this.supabaseFallbackReason}`);
+      }
       return null;
     }
 
@@ -463,7 +518,7 @@ export class Database {
         .catch((err: any) => {
           const reason = err?.message || 'Supabase unavailable';
           if (this.supabaseFallbackReason !== reason) {
-            console.warn(`[Supabase Fallback] ${reason} Using local JSON storage until resolved.`);
+            console.warn(`[Supabase Connection Error] ${reason}`);
           }
           this.supabaseReady = false;
           this.supabaseFallbackReason = reason;
@@ -474,6 +529,9 @@ export class Database {
     }
 
     const ready = await this.supabaseInitPromise;
+    if (!ready && IS_STRICT_PRODUCTION) {
+      throw new Error(`Database unavailable: ${this.supabaseFallbackReason || 'Failed to connect to Supabase.'}`);
+    }
     return ready ? client : null;
   }
 
@@ -978,17 +1036,19 @@ export class Database {
           .eq('id', id)
           .select('*')
           .maybeSingle();
+        throwIfSupabaseError(retry.error, 'updateUser');
         data = retry.data;
       } else if (error) {
         throwIfSupabaseError(error, 'updateUser');
       }
 
-      // Also sync locally
-      const local = this.getLocalData();
-      const lIdx = local.users.findIndex((u) => u.id === id);
-      if (lIdx !== -1) {
-        local.users[lIdx] = { ...local.users[lIdx], ...updates };
-        this.saveLocalData();
+      if (!IS_STRICT_PRODUCTION && fs.existsSync(DB_FILE)) {
+        const local = this.getLocalData();
+        const lIdx = local.users.findIndex((u) => u.id === id);
+        if (lIdx !== -1) {
+          local.users[lIdx] = { ...local.users[lIdx], ...updates };
+          this.saveLocalData();
+        }
       }
 
       return data ? { ...mapRowToUser(data), ...updates } : undefined;
@@ -1577,8 +1637,12 @@ export class Database {
     if (lesson.status !== 'published') throw new Error('Cannot update progress for an unpublished lesson');
 
     const mod = await this.getModuleById(lesson.moduleId);
-    if (!mod || mod.archived || mod.status !== 'published') {
-      throw new Error('Cannot update progress for an unpublished module');
+    if (!mod || mod.archived) {
+      throw new Error('Cannot update progress for an unavailable module');
+    }
+    const modAccess = await this.evaluateModuleAccess(user, mod);
+    if (modAccess.status === 'coming_soon' || !modAccess.isReleased) {
+      throw new Error('Cannot update progress for an unreleased module');
     }
 
     const rewardAmount = typeof lesson.xpReward === 'number' && lesson.xpReward >= 0 ? lesson.xpReward : 50;
@@ -1756,7 +1820,11 @@ export class Database {
     if (!lesson || lesson.status !== 'published') throw new Error('Lesson not available');
 
     const mod = await this.getModuleById(lesson.moduleId);
-    if (!mod || mod.archived || mod.status !== 'published') throw new Error('Module not available');
+    if (!mod || mod.archived) throw new Error('Module not available');
+    const modAccess = await this.evaluateModuleAccess(user, mod);
+    if (modAccess.status === 'coming_soon' || !modAccess.isReleased) {
+      throw new Error('Module not yet released');
+    }
 
     const now = new Date().toISOString();
     const validIds = new Set((lesson.checklist || []).map((c) => c.id));
@@ -1908,17 +1976,29 @@ export class Database {
     const user = await this.getUserById(studentId);
     if (!user) throw new Error('Student not found');
 
-    const [visibleModules, allVisibleLessons, studentProgress, announcements, settings] =
+    const [visibleModules, allVisibleLessons, allCurriculumLessons, studentProgress, announcements, settings] =
       await Promise.all([
         this.getModules('student_visible'),
         this.getLessons(undefined, 'student_visible'),
+        this.getLessons(undefined, 'all'),
         this.getStudentProgress(studentId),
         this.getAnnouncements(true),
         this.getSettings(),
       ]);
 
-    const publishedModules = visibleModules.filter((m) => m.status === 'published');
-    const comingSoonModules = visibleModules.filter((m) => m.status === 'coming_soon');
+    const moduleAccessPairs = await Promise.all(
+      visibleModules.map(async (m) => ({
+        module: m,
+        access: await this.evaluateModuleAccess(user, m),
+      }))
+    );
+
+    const publishedModules = moduleAccessPairs
+      .filter((p) => p.access.status !== 'coming_soon' && p.access.isReleased)
+      .map((p) => p.module);
+    const comingSoonModules = moduleAccessPairs
+      .filter((p) => p.access.status === 'coming_soon' || !p.access.isReleased)
+      .map((p) => p.module);
     const publishedModuleIds = new Set(publishedModules.map((m) => m.id));
     const modOrderMap = new Map(publishedModules.map((m) => [m.id, m.displayOrder]));
 
@@ -1935,16 +2015,24 @@ export class Database {
       studentProgress.filter((p) => p.completed).map((p) => p.lessonId)
     );
 
+    const activeModuleIds = new Set(visibleModules.map((m) => m.id));
+    const allModulesAll = await this.getModules('all');
+    const nonArchivedModuleIds = new Set(allModulesAll.filter((m) => !m.archived).map((m) => m.id));
+    const allRequiredCurriculumLessons = allCurriculumLessons.filter(
+      (l) => l.requiredForCertificate && (nonArchivedModuleIds.has(l.moduleId) || activeModuleIds.has(l.moduleId))
+    );
+
     const totalLessons = publishedLessons.length;
     const completedLessons = publishedLessons.filter((l) => completedLessonIds.has(l.id)).length;
-    const requiredLessons = publishedLessons.filter((l) => l.requiredForCertificate);
-    const completedRequiredLessons = requiredLessons.filter((l) => completedLessonIds.has(l.id)).length;
+    const completedRequiredLessons = allRequiredCurriculumLessons.filter((l) =>
+      completedLessonIds.has(l.id)
+    ).length;
 
     const progressPercent = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
 
     let completedModulesCount = 0;
-    const roadmap: RoadmapModuleItem[] = visibleModules.map((m) => {
-      if (m.status === 'coming_soon') {
+    const roadmap: RoadmapModuleItem[] = moduleAccessPairs.map(({ module: m, access }) => {
+      if (access.status === 'coming_soon' || !access.isReleased) {
         return {
           id: m.id,
           title: m.title,
@@ -2009,9 +2097,11 @@ export class Database {
       requiresPasswordChange: user.requiresPasswordChange || false,
       badges: user.badges || [],
       cohort: user.cohort,
+      cohortId: user.cohortId,
+      grantFullAccess: Boolean(user.grantFullAccess),
       completedLessonCount: completedLessons,
       completedRequiredCount: completedRequiredLessons,
-      totalRequiredCount: requiredLessons.length,
+      totalRequiredCount: allRequiredCurriculumLessons.length,
       progressPercent,
     };
 
@@ -2023,7 +2113,7 @@ export class Database {
       completedModulesCount,
       totalLessons,
       completedLessons,
-      totalRequiredLessons: requiredLessons.length,
+      totalRequiredLessons: allRequiredCurriculumLessons.length,
       completedRequiredLessons,
       progressPercent,
       nextLesson,
@@ -2722,11 +2812,17 @@ export class Database {
   }
 
   public async evaluateModuleAccess(user: User, module: CourseModule): Promise<{ status: ContentStatus; isReleased: boolean }> {
-    if (user.role === 'admin' || user.grantFullAccess) {
-      return { status: module.status === 'draft' ? 'draft' : 'published', isReleased: true };
-    }
-    if (module.status === 'draft') {
+    if (module.status === 'draft' || module.archived) {
       return { status: 'draft', isReleased: false };
+    }
+    if (user.role === 'admin' || user.grantFullAccess) {
+      return {
+        status: module.status,
+        isReleased: module.status === 'published',
+      };
+    }
+    if (module.status === 'coming_soon') {
+      return { status: 'coming_soon', isReleased: false };
     }
 
     if (user.cohortId) {
@@ -2739,15 +2835,19 @@ export class Database {
           return { status: 'coming_soon', isReleased: false };
         }
         if (cohort.status === 'active') {
-          if (cohort.releaseScheduleType === 'weekly') {
-            const weeksElapsed = Math.max(0, Math.floor((Date.now() - new Date(cohort.startDate).getTime()) / (7 * 24 * 60 * 60 * 1000)));
-            const requiredWeeks = (module.displayOrder - 1) * cohort.releaseDelayWeeks;
+          if (cohort.releaseScheduleType === 'weekly' || cohort.releaseScheduleType === 'date_based') {
+            const startMs = new Date(cohort.startDate).getTime();
+            const weeksElapsed = Number.isFinite(startMs)
+              ? Math.max(0, Math.floor((Date.now() - startMs) / (7 * 24 * 60 * 60 * 1000)))
+              : 0;
+            const requiredWeeks = Math.max(0, (module.displayOrder - 1) * (cohort.releaseDelayWeeks ?? 1));
             if (weeksElapsed >= requiredWeeks) {
-              return { status: module.status === 'coming_soon' ? 'published' : module.status, isReleased: module.status !== 'coming_soon' };
-            } else {
-              return { status: 'coming_soon', isReleased: false };
+              return { status: 'published', isReleased: true };
             }
+            return { status: 'coming_soon', isReleased: false };
           }
+          // Manual publication schedule releases all published modules
+          return { status: 'published', isReleased: true };
         }
       }
     }
@@ -2756,21 +2856,25 @@ export class Database {
   }
 
   public async getStudentsList(): Promise<StudentProfileSummary[]> {
-    const [allUsers, publishedModules, allLessons, allProgress, cohorts] = await Promise.all([
+    const [allUsers, activeModules, publishedModules, allLessons, allProgress, cohorts] = await Promise.all([
       this.getAllUsers(),
+      this.getModules('all'),
       this.getModules('published_only'),
-      this.getLessons(undefined, 'published_only'),
+      this.getLessons(undefined, 'all'),
       this.getAllProgress(),
       this.getCohorts(),
     ]);
 
     const students = allUsers.filter((u) => u.role === 'student');
+    const nonArchivedModIds = new Set(activeModules.filter((m) => !m.archived).map((m) => m.id));
     const publishedModIds = new Set(publishedModules.map((m) => m.id));
     const publishedLessons = allLessons.filter(
       (l) => l.status === 'published' && publishedModIds.has(l.moduleId)
     );
     const publishedLessonIds = new Set(publishedLessons.map((l) => l.id));
-    const requiredLessons = publishedLessons.filter((l) => l.requiredForCertificate);
+    const requiredLessons = allLessons.filter(
+      (l) => l.requiredForCertificate && nonArchivedModIds.has(l.moduleId)
+    );
     const requiredIds = new Set(requiredLessons.map((l) => l.id));
     const cohortMap = new Map(cohorts.map((c) => [c.id, c.name]));
 
@@ -2779,7 +2883,9 @@ export class Database {
         (p) => p.studentId === s.id && p.completed && publishedLessonIds.has(p.lessonId)
       );
       const completedCount = completions.length;
-      const completedRequired = completions.filter((c) => requiredIds.has(c.lessonId)).length;
+      const completedRequired = allProgress.filter(
+        (p) => p.studentId === s.id && p.completed && requiredIds.has(p.lessonId)
+      ).length;
       const progressPercent =
         publishedLessons.length > 0 ? Math.round((completedCount / publishedLessons.length) * 100) : 0;
 

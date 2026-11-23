@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useCallback } from 'react';
 import { Shield, ArrowRight } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext.js';
 import { AuthScreens } from './components/AuthScreens.js';
@@ -7,6 +7,8 @@ import { HomeView } from './components/HomeView.js';
 import { LearningView } from './components/LearningView.js';
 import { CertificateView } from './components/CertificateView.js';
 import { BonusVaultView } from './components/BonusVaultView.js';
+import { ProfileView } from './components/ProfileView.js';
+import type { AdminTab } from './components/AdminDashboardView.js';
 import { api } from './lib/api.js';
 import type { DashboardStats } from './types/index.js';
 
@@ -14,39 +16,114 @@ const AdminDashboardView = lazy(() =>
   import('./components/AdminDashboardView.js').then((mod) => ({ default: mod.AdminDashboardView }))
 );
 
+const STUDENT_TAB_PATHS: Record<StudentNavTab, string> = {
+  home: '/',
+  learning: '/learning',
+  certificate: '/certificate',
+  bonuses: '/bonuses',
+  profile: '/profile',
+};
+
+const ADMIN_TABS: AdminTab[] = [
+  'overview',
+  'students',
+  'cohorts',
+  'curriculum',
+  'announcements',
+  'bonuses',
+  'settings',
+];
+
+function parseStudentTabFromPath(pathname: string): StudentNavTab {
+  if (pathname === '/learning' || pathname.startsWith('/learning/')) return 'learning';
+  if (pathname === '/certificate' || pathname.startsWith('/certificate/')) return 'certificate';
+  if (pathname === '/bonuses' || pathname.startsWith('/bonuses/')) return 'bonuses';
+  if (pathname === '/profile' || pathname.startsWith('/profile/')) return 'profile';
+  return 'home';
+}
+
+function parseAdminTabFromPath(pathname: string): AdminTab {
+  const parts = pathname.replace(/^\/+|\/+$/g, '').split('/');
+  if (parts[0] === 'admin' && parts[1] && (ADMIN_TABS as string[]).includes(parts[1])) {
+    return parts[1] as AdminTab;
+  }
+  return 'overview';
+}
+
 function MainApp() {
-  const { user, token, isLoading, isAdmin } = useAuth();
-  const [activeTab, setActiveTab] = useState<StudentNavTab>('home');
+  const { user, isLoading, isAdmin } = useAuth();
+  const [pathname, setPathname] = useState<string>(() => window.location.pathname || '/');
+  const [activeTab, setActiveTab] = useState<StudentNavTab>(() =>
+    parseStudentTabFromPath(window.location.pathname || '/')
+  );
+  const [adminTab, setAdminTab] = useState<AdminTab>(() =>
+    parseAdminTabFromPath(window.location.pathname || '/')
+  );
   const [viewMode, setViewMode] = useState<'student' | 'admin'>('student');
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [selectedLessonId, setSelectedLessonId] = useState<string | undefined>(undefined);
   const [selectedModuleId, setSelectedModuleId] = useState<string | undefined>(undefined);
 
-  // Enforce strict role separation and /admin route handling
+  // Sync browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      const nextPath = window.location.pathname || '/';
+      setPathname(nextPath);
+      if (nextPath.startsWith('/admin') && isAdmin) {
+        setViewMode('admin');
+        setAdminTab(parseAdminTabFromPath(nextPath));
+      } else {
+        setActiveTab(parseStudentTabFromPath(nextPath));
+        if (isAdmin) {
+          setViewMode('student');
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [isAdmin]);
+
+  // Enforce strict role separation and SPA routing
   useEffect(() => {
     if (!user) {
       setViewMode('student');
+      setDashboardStats(null);
       return;
     }
 
-    const onAdminPath = window.location.pathname.startsWith('/admin');
+    const currentPath = window.location.pathname || '/';
+    const onAdminPath = currentPath.startsWith('/admin');
+    const onAuthPath = currentPath === '/login' || currentPath === '/register';
 
     if (!isAdmin) {
       setViewMode('student');
-      if (onAdminPath) {
+      if (onAdminPath || onAuthPath) {
         window.history.replaceState(null, '', '/');
+        setPathname('/');
+        setActiveTab('home');
+      } else {
+        setActiveTab(parseStudentTabFromPath(currentPath));
       }
       return;
     }
 
     const explicitStudentPreview = sessionStorage.getItem('preferred_view_mode') === 'student';
     if (onAdminPath || !explicitStudentPreview) {
+      const resolvedTab = onAdminPath ? parseAdminTabFromPath(currentPath) : adminTab;
+      setAdminTab(resolvedTab);
       setViewMode('admin');
       sessionStorage.setItem('preferred_view_mode', 'admin');
       if (!onAdminPath) {
-        window.history.replaceState(null, '', '/admin');
+        const target = resolvedTab === 'overview' ? '/admin' : `/admin/${resolvedTab}`;
+        window.history.replaceState(null, '', target);
+        setPathname(target);
       }
+    } else if (onAuthPath) {
+      window.history.replaceState(null, '', '/');
+      setPathname('/');
+      setActiveTab('home');
     }
   }, [isAdmin, user]);
 
@@ -60,7 +137,10 @@ function MainApp() {
         setViewMode((prev) => {
           const next = prev === 'admin' ? 'student' : 'admin';
           sessionStorage.setItem('preferred_view_mode', next);
-          window.history.replaceState(null, '', next === 'admin' ? '/admin' : '/');
+          const nextPath =
+            next === 'admin' ? (adminTab === 'overview' ? '/admin' : `/admin/${adminTab}`) : '/';
+          window.history.pushState(null, '', nextPath);
+          setPathname(nextPath);
           return next;
         });
       }
@@ -68,24 +148,37 @@ function MainApp() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isAdmin]);
+  }, [isAdmin, adminTab]);
+
+  const navigateStudentTab = useCallback((tab: StudentNavTab) => {
+    setActiveTab(tab);
+    const targetPath = STUDENT_TAB_PATHS[tab] || '/';
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState(null, '', targetPath);
+      setPathname(targetPath);
+    }
+  }, []);
+
+  const handleAdminTabChange = useCallback((tab: AdminTab) => {
+    setAdminTab(tab);
+    const targetPath = tab === 'overview' ? '/admin' : `/admin/${tab}`;
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState(null, '', targetPath);
+      setPathname(targetPath);
+    }
+  }, []);
 
   const openAdminView = () => {
     if (!isAdmin) return;
     setViewMode('admin');
     sessionStorage.setItem('preferred_view_mode', 'admin');
-    window.history.replaceState(null, '', '/admin');
+    const targetPath = adminTab === 'overview' ? '/admin' : `/admin/${adminTab}`;
+    window.history.pushState(null, '', targetPath);
+    setPathname(targetPath);
   };
 
-  const closeAdminView = () => {
-    setViewMode('student');
-    sessionStorage.setItem('preferred_view_mode', 'student');
-    window.history.replaceState(null, '', '/');
-    fetchDashboardStats();
-  };
-
-  const fetchDashboardStats = async () => {
-    if (!token || !user) return;
+  const fetchDashboardStats = useCallback(async () => {
+    if (!user) return;
     try {
       setStatsLoading(true);
       const data = await api.getDashboard();
@@ -95,26 +188,40 @@ function MainApp() {
     } finally {
       setStatsLoading(false);
     }
+  }, [user]);
+
+  const closeAdminView = () => {
+    setViewMode('student');
+    sessionStorage.setItem('preferred_view_mode', 'student');
+    setActiveTab('home');
+    window.history.pushState(null, '', '/');
+    setPathname('/');
+    fetchDashboardStats();
   };
 
   useEffect(() => {
-    if (token && user) {
+    if (user) {
       fetchDashboardStats();
     }
-  }, [token, user]);
+  }, [user, fetchDashboardStats]);
 
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 space-y-3">
         <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-xs font-semibold text-slate-300">Loading 1 Million Naira Skill Challenge...</p>
+        <p className="text-xs font-semibold text-slate-300">
+          Loading 1 Million Naira Skill Challenge...
+        </p>
       </div>
     );
   }
 
   // Not signed in
-  if (!user || !token) {
-    return <AuthScreens />;
+  if (!user) {
+    const isAdminRoute = pathname.startsWith('/admin');
+    const initialMode =
+      isAdminRoute ? 'admin' : pathname === '/register' ? 'register' : 'login';
+    return <AuthScreens initialMode={initialMode} isAdminRoute={isAdminRoute} />;
   }
 
   // Admin View (Protected: requires verified isAdmin)
@@ -128,7 +235,11 @@ function MainApp() {
           </div>
         }
       >
-        <AdminDashboardView onBackToStudentView={closeAdminView} />
+        <AdminDashboardView
+          onBackToStudentView={closeAdminView}
+          activeTab={adminTab}
+          onTabChange={handleAdminTabChange}
+        />
       </Suspense>
     );
   }
@@ -137,11 +248,11 @@ function MainApp() {
   const handleJumpToLearning = (lessonId?: string, moduleId?: string) => {
     setSelectedLessonId(lessonId);
     setSelectedModuleId(moduleId);
-    setActiveTab('learning');
+    navigateStudentTab('learning');
   };
 
   const handleJumpToCertificate = () => {
-    setActiveTab('certificate');
+    navigateStudentTab('certificate');
   };
 
   return (
@@ -166,7 +277,7 @@ function MainApp() {
       <StudentNavigation
         activeTab={activeTab}
         onTabChange={(tab) => {
-          setActiveTab(tab);
+          navigateStudentTab(tab);
           if (tab !== 'learning') {
             setSelectedLessonId(undefined);
             setSelectedModuleId(undefined);
@@ -180,12 +291,6 @@ function MainApp() {
       />
 
       <main className="flex-1">
-        {/* STRICT ORDER ENFORCEMENT:
-            1. Home
-            2. My Learning
-            3. Certificate
-            4. Bonus Vault
-        */}
         {activeTab === 'home' && (
           <HomeView
             stats={dashboardStats}
@@ -208,10 +313,15 @@ function MainApp() {
         )}
 
         {activeTab === 'bonuses' && <BonusVaultView />}
+
+        {activeTab === 'profile' && <ProfileView student={dashboardStats?.student || user} />}
       </main>
 
       <footer className="py-6 px-4 text-center text-xs text-slate-500 border-t border-slate-200/60 bg-white">
-        <p>© {new Date().getFullYear()} 1 Million Naira Skill Challenge by Elshaddai Idoga. All rights reserved.</p>
+        <p>
+          © {new Date().getFullYear()} 1 Million Naira Skill Challenge by Elshaddai Idoga. All
+          rights reserved.
+        </p>
       </footer>
     </div>
   );

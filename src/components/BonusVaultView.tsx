@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Gift, Video, FileText, Download, ExternalLink, CheckSquare, Sparkles } from 'lucide-react';
 import { api } from '../lib/api.js';
+import { sanitizeExternalUrl } from '../lib/url.js';
 import type { BonusResource, BonusResourceType } from '../types/index.js';
 
 const TYPE_CONFIG: Record<
@@ -130,15 +131,25 @@ export function BonusVaultView() {
 
                 <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
                   <span className="text-[11px] text-slate-400">Available to all students</span>
-                  <a
-                    href={bonus.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-semibold text-xs transition-colors shadow-sm"
-                  >
-                    <span>Access Resource</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
+                  {(() => {
+                    const safeBonusUrl = sanitizeExternalUrl(bonus.url);
+                    if (!safeBonusUrl) {
+                      return (
+                        <span className="text-[11px] text-slate-400 italic">Link unavailable</span>
+                      );
+                    }
+                    return (
+                      <a
+                        href={safeBonusUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-semibold text-xs transition-colors shadow-sm"
+                      >
+                        <span>Access Resource</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    );
+                  })()}
                 </div>
               </div>
             );

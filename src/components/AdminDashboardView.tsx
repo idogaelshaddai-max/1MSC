@@ -51,9 +51,18 @@ import type {
 
 interface AdminDashboardViewProps {
   onBackToStudentView: () => void;
+  activeTab?: AdminTab;
+  onTabChange?: (tab: AdminTab) => void;
 }
 
-type AdminTab = 'overview' | 'students' | 'cohorts' | 'curriculum' | 'announcements' | 'bonuses' | 'settings';
+export type AdminTab =
+  | 'overview'
+  | 'students'
+  | 'cohorts'
+  | 'curriculum'
+  | 'announcements'
+  | 'bonuses'
+  | 'settings';
 type ModuleArchiveFilter = 'active' | 'archived';
 type ModuleStatusFilter = 'all' | ContentStatus;
 
@@ -72,8 +81,17 @@ const STATUS_BADGE_MAP: Record<ContentStatus, { label: string; classes: string }
   },
 };
 
-export function AdminDashboardView({ onBackToStudentView }: AdminDashboardViewProps) {
-  const [activeTab, setActiveTab] = useState<AdminTab>('overview');
+export function AdminDashboardView({
+  onBackToStudentView,
+  activeTab: controlledTab,
+  onTabChange,
+}: AdminDashboardViewProps) {
+  const [internalTab, setInternalTab] = useState<AdminTab>(controlledTab || 'overview');
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = (tab: AdminTab) => {
+    setInternalTab(tab);
+    onTabChange?.(tab);
+  };
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
 
@@ -185,7 +203,7 @@ export function AdminDashboardView({ onBackToStudentView }: AdminDashboardViewPr
 
   // Delete confirmation modal
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
-    type: 'module' | 'lesson' | 'bonus' | 'announcement';
+    type: 'module' | 'lesson' | 'bonus' | 'announcement' | 'cohort';
     id: string;
     title: string;
     consequenceText: string;
@@ -269,16 +287,14 @@ export function AdminDashboardView({ onBackToStudentView }: AdminDashboardViewPr
     }
   };
 
-  const handleDeleteCohort = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete cohort "${name}"?`)) return;
-    try {
-      await api.deleteCohort(id);
-      const updated = await api.getAdminCohorts();
-      setCohorts(updated);
-      notify('Cohort deleted.');
-    } catch (err: any) {
-      notify(err.message || 'Failed to delete cohort');
-    }
+  const handleDeleteCohort = (id: string, name: string) => {
+    setDeleteConfirmation({
+      type: 'cohort',
+      id,
+      title: name,
+      consequenceText:
+        'Deleting this cohort removes the cohort record. Assigned students will remain active without this cohort.',
+    });
   };
 
   const handleAssignStudentCohort = async (studentId: string, cohortId: string) => {
@@ -778,6 +794,12 @@ export function AdminDashboardView({ onBackToStudentView }: AdminDashboardViewPr
         const an = await api.getAdminAnnouncements();
         setAnnouncements(an);
         notify('Announcement deleted.');
+      } else if (type === 'cohort') {
+        await api.deleteCohort(id);
+        const [coh, st] = await Promise.all([api.getAdminCohorts(), api.getAdminStudents()]);
+        setCohorts(coh);
+        setStudents(st);
+        notify('Cohort deleted.');
       }
       api.getAdminOverview().then(setOverview);
     } catch (err: any) {

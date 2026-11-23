@@ -11,43 +11,12 @@ import type {
   Cohort,
 } from '../types/index.js';
 
-const TOKEN_KEY = 'noble_challenge_token';
-let memoryTokenFallback: string | null = null;
-
-export const authStorage = {
-  getToken(): string | null {
-    try {
-      return window.localStorage.getItem(TOKEN_KEY) ?? memoryTokenFallback;
-    } catch {
-      return memoryTokenFallback;
-    }
-  },
-  setToken(token: string) {
-    memoryTokenFallback = token;
-    try {
-      window.localStorage.setItem(TOKEN_KEY, token);
-    } catch {
-      // Ignore storage restrictions in sandboxed/private iframes
-    }
-  },
-  clearToken() {
-    memoryTokenFallback = null;
-    try {
-      window.localStorage.removeItem(TOKEN_KEY);
-    } catch {
-      // Ignore storage restrictions in sandboxed/private iframes
-    }
-  },
-};
-
 async function fetchWithAuth(url: string, options: RequestInit = {}) {
-  const token = authStorage.getToken();
   const headers = new Headers(options.headers || {});
-  headers.set('Content-Type', 'application/json');
-
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
+  if (!headers.has('Content-Type') && options.body) {
+    headers.set('Content-Type', 'application/json');
   }
+  headers.set('X-Requested-With', 'XMLHttpRequest');
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -56,6 +25,7 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
   try {
     response = await fetch(url, {
       ...options,
+      credentials: 'include',
       headers,
       signal: options.signal ?? controller.signal,
     });
@@ -81,8 +51,11 @@ export const api = {
   getSystemStatus: () => fetchWithAuth('/api/system/status'),
   setupFirstAdmin: (data: { fullName: string; email: string; password: string }) =>
     fetchWithAuth('/api/auth/first-admin-setup', { method: 'POST', body: JSON.stringify(data) }),
+  register: (data: { fullName: string; email: string; password: string }) =>
+    fetchWithAuth('/api/auth/register', { method: 'POST', body: JSON.stringify(data) }),
   login: (data: { email: string; password: string }) =>
     fetchWithAuth('/api/auth/login', { method: 'POST', body: JSON.stringify(data) }),
+  logout: () => fetchWithAuth('/api/auth/logout', { method: 'POST' }),
   getMe: (): Promise<StudentProfileSummary> => fetchWithAuth('/api/auth/me'),
   setupAccount: (data: { token: string; newPassword: string }) =>
     fetchWithAuth('/api/auth/setup-account', { method: 'POST', body: JSON.stringify(data) }),

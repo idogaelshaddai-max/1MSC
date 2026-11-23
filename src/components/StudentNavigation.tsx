@@ -34,10 +34,10 @@ export function StudentNavigation({
     <>
       {/* DESKTOP & TABLET TOP BAR */}
       <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 text-white shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4 sm:gap-8">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 h-16 flex items-center justify-between gap-2 sm:gap-6">
           {/* Brand Wordmark */}
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="w-9 h-9 rounded-lg overflow-hidden border border-amber-500/50 shadow-md shrink-0 bg-slate-950 flex items-center justify-center">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg overflow-hidden border border-amber-500/50 shadow-md shrink-0 bg-slate-950 flex items-center justify-center">
               <img
                 src={cashLogo}
                 alt="Cash Bundle"
@@ -47,12 +47,12 @@ export function StudentNavigation({
             </div>
             <button
               onClick={() => onTabChange('home')}
-              className="text-left cursor-pointer transition-colors group"
+              className="text-left cursor-pointer transition-colors group min-w-0"
             >
-              <span className="text-sm sm:text-base font-bold tracking-tight text-white group-hover:text-amber-300 whitespace-nowrap block leading-tight">
+              <span className="text-xs sm:text-base font-bold tracking-tight text-white group-hover:text-amber-300 truncate block leading-tight">
                 1 Million Naira Skill Challenge
               </span>
-              <span className="text-[10px] text-amber-400 font-semibold uppercase tracking-wider block">
+              <span className="text-[10px] text-amber-400 font-semibold uppercase tracking-wider block truncate">
                 by Elshaddai Idoga
               </span>
             </button>

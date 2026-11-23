@@ -30,6 +30,7 @@ import {
   X,
   Calendar,
   Shield,
+  KeyRound,
 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import type {
@@ -131,6 +132,8 @@ export function AdminDashboardView({
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
   const [newStudentFullName, setNewStudentFullName] = useState('');
   const [newStudentEmail, setNewStudentEmail] = useState('');
+  const [newStudentTempPassword, setNewStudentTempPassword] = useState('');
+  const [newStudentCohortId, setNewStudentCohortId] = useState('');
   const [createdStudentResult, setCreatedStudentResult] = useState<{
     email: string;
     fullName: string;
@@ -138,9 +141,21 @@ export function AdminDashboardView({
     temporaryPassword?: string;
   } | null>(null);
 
+  const [editingStudent, setEditingStudent] = useState<StudentProfileSummary | null>(null);
+  const [editStudentForm, setEditStudentForm] = useState({
+    fullName: '',
+    email: '',
+    cohortId: '',
+    isActive: true,
+  });
+
+  const [resetPasswordStudent, setResetPasswordStudent] = useState<StudentProfileSummary | null>(null);
+  const [resetCustomPassword, setResetCustomPassword] = useState('');
   const [resetLinkResult, setResetLinkResult] = useState<{
     email: string;
-    resetLink: string;
+    fullName?: string;
+    temporaryPassword?: string;
+    resetLink?: string;
   } | null>(null);
 
   // Module modal
@@ -203,7 +218,7 @@ export function AdminDashboardView({
 
   // Delete confirmation modal
   const [deleteConfirmation, setDeleteConfirmation] = useState<{
-    type: 'module' | 'lesson' | 'bonus' | 'announcement' | 'cohort';
+    type: 'module' | 'lesson' | 'bonus' | 'announcement' | 'cohort' | 'student';
     id: string;
     title: string;
     consequenceText: string;
@@ -328,15 +343,21 @@ export function AdminDashboardView({
   const handleCreateStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStudentFullName.trim() || !newStudentEmail.trim()) return;
+    if (newStudentTempPassword.trim() && newStudentTempPassword.trim().length < 8) {
+      notify('Temporary password must be at least 8 characters long.');
+      return;
+    }
 
     try {
       const res = await api.createStudent({
         fullName: newStudentFullName.trim(),
         email: newStudentEmail.trim(),
+        ...(newStudentTempPassword.trim() ? { temporaryPassword: newStudentTempPassword.trim() } : {}),
+        ...(newStudentCohortId ? { cohortId: newStudentCohortId } : {}),
       });
 
       const origin = window.location.origin;
-      const setupLink = `${origin}/?token=${res.student.inviteToken}`;
+      const setupLink = res.student.inviteToken ? `${origin}/?token=${res.student.inviteToken}` : '';
 
       setCreatedStudentResult({
         email: res.student.email,
@@ -347,12 +368,44 @@ export function AdminDashboardView({
 
       setNewStudentFullName('');
       setNewStudentEmail('');
-      notify('Student provisioned successfully!');
+      setNewStudentTempPassword('');
+      setNewStudentCohortId('');
+      notify('Student account created successfully!');
       const updatedStudents = await api.getAdminStudents();
       setStudents(updatedStudents);
       api.getAdminOverview().then(setOverview);
     } catch (err: any) {
       notify(err.message || 'Failed to create student account');
+    }
+  };
+
+  const handleOpenEditStudent = (student: StudentProfileSummary) => {
+    setEditingStudent(student);
+    setEditStudentForm({
+      fullName: student.fullName,
+      email: student.email,
+      cohortId: student.cohortId || '',
+      isActive: student.isActive,
+    });
+  };
+
+  const handleSaveEditStudent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStudent || !editStudentForm.fullName.trim() || !editStudentForm.email.trim()) return;
+    try {
+      await api.updateStudent(editingStudent.id, {
+        fullName: editStudentForm.fullName.trim(),
+        email: editStudentForm.email.trim(),
+        cohortId: editStudentForm.cohortId || null,
+        isActive: editStudentForm.isActive,
+      });
+      setEditingStudent(null);
+      const updatedStudents = await api.getAdminStudents();
+      setStudents(updatedStudents);
+      api.getAdminOverview().then(setOverview);
+      notify('Student information updated successfully.');
+    } catch (err: any) {
+      notify(err.message || 'Failed to update student');
     }
   };
 
@@ -363,10 +416,43 @@ export function AdminDashboardView({
       setStudents((prev) =>
         prev.map((s) => (s.id === studentId ? { ...s, isActive: newStatus } : s))
       );
-      notify(`Student account ${newStatus ? 'reactivated' : 'deactivated and blocked'}.`);
+      notify(`Student account ${newStatus ? 'reactivated' : 'suspended and blocked'}.`);
       api.getAdminOverview().then(setOverview);
     } catch (err: any) {
       notify(err.message || 'Failed to update student status');
+    }
+  };
+
+  const handleOpenResetPasswordModal = (student: StudentProfileSummary) => {
+    setResetPasswordStudent(student);
+    setResetCustomPassword('');
+    setResetLinkResult(null);
+  };
+
+  const handleExecuteResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetPasswordStudent) return;
+    if (resetCustomPassword.trim() && resetCustomPassword.trim().length < 8) {
+      notify('Temporary password must be at least 8 characters long.');
+      return;
+    }
+
+    try {
+      const res = await api.resetStudentPassword(
+        resetPasswordStudent.id,
+        resetCustomPassword.trim() || undefined
+      );
+      setResetLinkResult({
+        email: res.email,
+        fullName: res.fullName,
+        temporaryPassword: res.temporaryPassword,
+      });
+      setResetPasswordStudent(null);
+      const updatedStudents = await api.getAdminStudents();
+      setStudents(updatedStudents);
+      notify('Student temporary password updated.');
+    } catch (err: any) {
+      notify(err.message || 'Failed to reset student password');
     }
   };
 
@@ -379,6 +465,7 @@ export function AdminDashboardView({
         email: res.email,
         resetLink,
       });
+      setResetPasswordStudent(null);
     } catch (err: any) {
       notify(err.message || 'Failed to generate reset link');
     }
@@ -800,6 +887,11 @@ export function AdminDashboardView({
         setCohorts(coh);
         setStudents(st);
         notify('Cohort deleted.');
+      } else if (type === 'student') {
+        await api.deleteStudent(id);
+        const st = await api.getAdminStudents();
+        setStudents(st);
+        notify('Student account permanently deleted.');
       }
       api.getAdminOverview().then(setOverview);
     } catch (err: any) {
@@ -1098,16 +1190,22 @@ export function AdminDashboardView({
               <div>
                 <h2 className="text-lg font-bold text-white">Student Enrollment & Access</h2>
                 <p className="text-xs text-slate-400">
-                  Provision new students, generate one-time setup links, or manage account access.
+                  Create student accounts, assign temporary passwords, manage cohorts, or suspend access.
                 </p>
               </div>
 
               <button
-                onClick={() => setShowAddStudentModal(true)}
+                onClick={() => {
+                  setNewStudentFullName('');
+                  setNewStudentEmail('');
+                  setNewStudentTempPassword('');
+                  setNewStudentCohortId('');
+                  setShowAddStudentModal(true);
+                }}
                 className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-all flex items-center gap-2 cursor-pointer shadow-md"
               >
                 <Plus className="w-4 h-4" />
-                <span>Invite / Add Student</span>
+                <span>Add Student</span>
               </button>
             </div>
 
@@ -1140,7 +1238,7 @@ export function AdminDashboardView({
                     {filteredStudents.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
-                          No students found. Use "Invite / Add Student" to provision accounts.
+                          No students found. Click "Add Student" to create a student account.
                         </td>
                       </tr>
                     ) : (
@@ -1178,15 +1276,22 @@ export function AdminDashboardView({
                               </button>
                             </div>
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="px-4 py-3 space-y-1">
                             {s.isActive ? (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800">
                                 Active
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-red-950 text-red-300 border border-red-800">
-                                Deactivated
+                                Suspended
                               </span>
+                            )}
+                            {s.requiresPasswordChange && (
+                              <div>
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-950/70 text-amber-300 border border-amber-800/70">
+                                  Temp Password
+                                </span>
+                              </div>
                             )}
                           </td>
                           <td className="px-4 py-3">
@@ -1203,25 +1308,53 @@ export function AdminDashboardView({
                           <td className="px-4 py-3 text-slate-400">
                             {new Date(s.enrollmentDate).toLocaleDateString()}
                           </td>
-                          <td className="px-4 py-3 text-right space-x-2">
-                            <button
-                              onClick={() => handleToggleStudentStatus(s.id, s.isActive)}
-                              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
-                                s.isActive
-                                  ? 'bg-red-950/80 text-red-300 hover:bg-red-900 border border-red-800/80'
-                                  : 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border border-emerald-800/80'
-                              }`}
-                            >
-                              {s.isActive ? 'Deactivate' : 'Reactivate'}
-                            </button>
+                          <td className="px-4 py-3 text-right">
+                            <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => handleOpenEditStudent(s)}
+                                title="Edit student details"
+                                className="px-2 py-1 rounded-md bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white text-[11px] font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
 
-                            <button
-                              onClick={() => handleGenerateResetLink(s.id)}
-                              title="Generate password reset link"
-                              className="px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white text-[11px] font-medium transition-colors cursor-pointer"
-                            >
-                              Reset Link
-                            </button>
+                              <button
+                                onClick={() => handleOpenResetPasswordModal(s)}
+                                title="Reset temporary password"
+                                className="px-2 py-1 rounded-md bg-blue-950/80 text-blue-300 hover:bg-blue-900 border border-blue-800/80 text-[11px] font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
+                              >
+                                <KeyRound className="w-3 h-3" />
+                                <span>Reset Password</span>
+                              </button>
+
+                              <button
+                                onClick={() => handleToggleStudentStatus(s.id, s.isActive)}
+                                className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
+                                  s.isActive
+                                    ? 'bg-amber-950/80 text-amber-300 hover:bg-amber-900 border border-amber-800/80'
+                                    : 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border border-emerald-800/80'
+                                }`}
+                              >
+                                {s.isActive ? 'Suspend' : 'Reactivate'}
+                              </button>
+
+                              <button
+                                onClick={() =>
+                                  setDeleteConfirmation({
+                                    type: 'student',
+                                    id: s.id,
+                                    title: `${s.fullName} (${s.email})`,
+                                    consequenceText:
+                                      'Deleting this student permanently removes their account and all recorded lesson progress.',
+                                  })
+                                }
+                                title="Delete student account"
+                                className="p-1.5 rounded-md bg-red-950/70 text-red-300 hover:bg-red-900 border border-red-800/80 transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -2145,15 +2278,15 @@ export function AdminDashboardView({
       )}
 
       {/* ========================================================= */}
-      {/* MODAL: ADD / INVITE STUDENT */}
+      {/* MODAL: ADD STUDENT */}
       {/* ========================================================= */}
       {showAddStudentModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
-            <h3 className="text-base font-bold text-white">Invite / Add Student</h3>
+            <h3 className="text-base font-bold text-white">Add Student Account</h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Enter the student's full name and email address. The system will generate a secure
-              one-time account setup link and temporary password.
+              Create a new enrolled student account. Leave the temporary password blank to
+              auto-generate a secure password, or enter one directly.
             </p>
 
             <form onSubmit={handleCreateStudent} className="space-y-4">
@@ -2183,19 +2316,50 @@ export function AdminDashboardView({
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Cohort / Batch (Optional)
+                </label>
+                <select
+                  value={newStudentCohortId}
+                  onChange={(e) => setNewStudentCohortId(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
+                >
+                  <option value="">No specific cohort</option>
+                  {cohorts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.status})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Temporary Password (Optional, min. 8 chars)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Leave blank to auto-generate (e.g. Skill-4821-9310)"
+                  value={newStudentTempPassword}
+                  onChange={(e) => setNewStudentTempPassword(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-mono"
+                />
+              </div>
+
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setShowAddStudentModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs"
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer"
                 >
-                  Create & Generate Link
+                  Create Student Account
                 </button>
               </div>
             </form>
@@ -2204,57 +2368,157 @@ export function AdminDashboardView({
       )}
 
       {/* ========================================================= */}
-      {/* MODAL: CREATED STUDENT LINK NOTICE */}
+      {/* MODAL: EDIT STUDENT */}
+      {/* ========================================================= */}
+      {editingStudent && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-white">Edit Student Account</h3>
+
+            <form onSubmit={handleSaveEditStudent} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editStudentForm.fullName}
+                  onChange={(e) =>
+                    setEditStudentForm({ ...editStudentForm, fullName: e.target.value })
+                  }
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={editStudentForm.email}
+                  onChange={(e) =>
+                    setEditStudentForm({ ...editStudentForm, email: e.target.value })
+                  }
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Cohort Assignment
+                </label>
+                <select
+                  value={editStudentForm.cohortId}
+                  onChange={(e) =>
+                    setEditStudentForm({ ...editStudentForm, cohortId: e.target.value })
+                  }
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
+                >
+                  <option value="">No Cohort</option>
+                  {cohorts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.status})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Account Status
+                </label>
+                <select
+                  value={editStudentForm.isActive ? 'active' : 'suspended'}
+                  onChange={(e) =>
+                    setEditStudentForm({
+                      ...editStudentForm,
+                      isActive: e.target.value === 'active',
+                    })
+                  }
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
+                >
+                  <option value="active">Active (Portal Access Enabled)</option>
+                  <option value="suspended">Suspended (Portal Access Blocked)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingStudent(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: CREATED STUDENT CREDENTIALS NOTICE */}
       {/* ========================================================= */}
       {createdStudentResult && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-950 border border-amber-500/80 rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl">
             <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
               <CheckCircle2 className="w-5 h-5 text-amber-400" />
-              <span>Student Account Provisioned</span>
+              <span>Student Account Created</span>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Student account created for{' '}
+              Account created for{' '}
               <strong className="text-white">{createdStudentResult.fullName}</strong> (
-              {createdStudentResult.email}). Share the one-time setup link or temporary password
-              below.
+              {createdStudentResult.email}). Share their login email and temporary password below so
+              they can sign in immediately at the student portal.
             </p>
 
             <div className="space-y-3 p-3.5 bg-slate-900 rounded-xl border border-slate-800 text-xs">
-              <div>
-                <span className="text-[10px] uppercase font-semibold text-slate-400 block mb-1">
-                  One-Time Setup Link
-                </span>
-                <div className="flex items-center gap-2">
-                  <input
-                    readOnly
-                    value={createdStudentResult.setupLink}
-                    className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 font-mono text-[11px] text-amber-300"
-                  />
-                  <button
-                    onClick={() => copyToClipboard(createdStudentResult.setupLink)}
-                    className="p-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
-                  >
-                    <Copy className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
               {createdStudentResult.temporaryPassword && (
                 <div>
                   <span className="text-[10px] uppercase font-semibold text-slate-400 block mb-1">
-                    Temporary Setup Password (1-Time Use)
+                    Assigned Temporary Password
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs font-bold text-white bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
+                    <span className="flex-1 font-mono text-xs font-bold text-white bg-slate-950 px-2.5 py-1.5 rounded border border-slate-800">
                       {createdStudentResult.temporaryPassword}
                     </span>
                     <button
                       onClick={() => copyToClipboard(createdStudentResult.temporaryPassword!)}
-                      className="p-1.5 rounded bg-slate-800 text-slate-300 hover:text-white"
+                      className="p-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 cursor-pointer"
+                      title="Copy temporary password"
                     >
-                      <Copy className="w-3.5 h-3.5" />
+                      <Copy className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {createdStudentResult.setupLink && (
+                <div>
+                  <span className="text-[10px] uppercase font-semibold text-slate-400 block mb-1">
+                    Optional Direct Password Setup Link
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      readOnly
+                      value={createdStudentResult.setupLink}
+                      className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 font-mono text-[11px] text-amber-300"
+                    />
+                    <button
+                      onClick={() => copyToClipboard(createdStudentResult.setupLink)}
+                      className="p-1.5 rounded bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
+                      title="Copy setup link"
+                    >
+                      <Copy className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
@@ -2266,7 +2530,7 @@ export function AdminDashboardView({
                 setCreatedStudentResult(null);
                 setShowAddStudentModal(false);
               }}
-              className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs uppercase"
+              className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs uppercase cursor-pointer"
             >
               Done & Close
             </button>
@@ -2275,34 +2539,121 @@ export function AdminDashboardView({
       )}
 
       {/* ========================================================= */}
-      {/* MODAL: RESET LINK GENERATED */}
+      {/* MODAL: RESET STUDENT PASSWORD PROMPT */}
+      {/* ========================================================= */}
+      {resetPasswordStudent && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-white">Reset Student Password</h3>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Assign a new temporary password for{' '}
+              <strong className="text-white">{resetPasswordStudent.fullName}</strong> (
+              {resetPasswordStudent.email}), or leave blank to auto-generate one.
+            </p>
+
+            <form onSubmit={handleExecuteResetPassword} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  New Temporary Password (Optional, min. 8 chars)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Leave blank to auto-generate"
+                  value={resetCustomPassword}
+                  onChange={(e) => setResetCustomPassword(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleGenerateResetLink(resetPasswordStudent.id)}
+                  className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs font-medium cursor-pointer"
+                >
+                  Generate Setup Link Instead
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setResetPasswordStudent(null)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer"
+                  >
+                    Reset Password
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: RESET PASSWORD / LINK RESULT */}
       {/* ========================================================= */}
       {resetLinkResult && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
-            <h3 className="text-base font-bold text-white">Reset Link Generated</h3>
+          <div className="bg-slate-950 border border-amber-500/80 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-white">
+              {resetLinkResult.temporaryPassword
+                ? 'Student Password Reset'
+                : 'Reset Link Generated'}
+            </h3>
             <p className="text-xs text-slate-300">
-              A secure 48-hour password reset link has been created for{' '}
-              <strong className="text-white">{resetLinkResult.email}</strong>.
+              {resetLinkResult.temporaryPassword ? (
+                <>
+                  A new temporary password has been set for{' '}
+                  <strong className="text-white">{resetLinkResult.email}</strong>.
+                </>
+              ) : (
+                <>
+                  A 48-hour password reset link has been created for{' '}
+                  <strong className="text-white">{resetLinkResult.email}</strong>.
+                </>
+              )}
             </p>
 
-            <div className="flex items-center gap-2">
-              <input
-                readOnly
-                value={resetLinkResult.resetLink}
-                className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-2 font-mono text-[11px] text-amber-300"
-              />
-              <button
-                onClick={() => copyToClipboard(resetLinkResult.resetLink)}
-                className="p-2 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
-              >
-                <Copy className="w-4 h-4" />
-              </button>
-            </div>
+            {resetLinkResult.temporaryPassword && (
+              <div className="flex items-center gap-2">
+                <span className="flex-1 bg-slate-900 border border-slate-800 rounded px-3 py-2 font-mono text-xs font-bold text-amber-300">
+                  {resetLinkResult.temporaryPassword}
+                </span>
+                <button
+                  onClick={() => copyToClipboard(resetLinkResult.temporaryPassword!)}
+                  className="p-2 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 cursor-pointer"
+                  title="Copy temporary password"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {resetLinkResult.resetLink && (
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={resetLinkResult.resetLink}
+                  className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-2 font-mono text-[11px] text-amber-300"
+                />
+                <button
+                  onClick={() => copyToClipboard(resetLinkResult.resetLink!)}
+                  className="p-2 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 cursor-pointer"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+            )}
 
             <button
               onClick={() => setResetLinkResult(null)}
-              className="w-full py-2 rounded-xl bg-slate-800 text-white text-xs font-semibold"
+              className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold cursor-pointer"
             >
               Close
             </button>

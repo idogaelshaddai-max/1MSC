@@ -8,22 +8,20 @@ import {
   AlertCircle,
   ArrowRight,
   KeyRound,
-  UserPlus,
 } from 'lucide-react';
 import heroImg from '../assets/images/challenge_portal_hero_1793022375000.jpg';
 
 interface AuthScreensProps {
-  initialMode?: 'login' | 'register' | 'admin';
+  initialMode?: 'login' | 'admin';
   isAdminRoute?: boolean;
 }
 
-type AuthMode = 'login' | 'register' | 'admin-login' | 'first-admin' | 'setup-token';
+type AuthMode = 'login' | 'admin-login' | 'first-admin' | 'setup-token';
 
 export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: AuthScreensProps) {
   const {
     systemStatus,
     login,
-    register,
     setupFirstAdmin,
     setupAccountWithToken,
     isDeactivated,
@@ -32,7 +30,6 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
 
   const [mode, setMode] = useState<AuthMode>(() => {
     if (isAdminRoute || initialMode === 'admin') return 'admin-login';
-    if (initialMode === 'register') return 'register';
     return 'login';
   });
 
@@ -69,23 +66,15 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
       return;
     }
 
-    if (initialMode === 'register') {
-      setMode('register');
-    } else {
-      setMode('login');
-    }
-  }, [systemStatus, isAdminRoute, initialMode]);
+    setMode('login');
+  }, [systemStatus, isAdminRoute]);
 
-  const switchStudentMode = (next: 'login' | 'register' | 'setup-token') => {
+  const handleReturnToLogin = () => {
     setError(null);
     setSuccessNotice(null);
-    setMode(next);
+    setMode(isAdminRoute ? 'admin-login' : 'login');
     try {
-      if (next === 'register' && window.location.pathname !== '/register') {
-        window.history.replaceState(null, '', '/register');
-      } else if (next === 'login' && (window.location.pathname === '/register' || window.location.pathname === '/login')) {
-        window.history.replaceState(null, '', '/login');
-      }
+      window.history.replaceState(null, '', isAdminRoute ? '/admin' : '/');
     } catch {
       // Ignore history errors
     }
@@ -96,36 +85,9 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
     setError(null);
     setLoading(true);
     try {
-      await login(email.trim(), password);
+      await login(email.trim(), password, isAdminRoute ? 'admin' : 'student');
     } catch (err: any) {
       setError(err.message || 'Failed to sign in. Please verify your credentials.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRegisterSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!fullName.trim()) {
-      setError('Please enter your full name.');
-      return;
-    }
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters long.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await register(fullName.trim(), email.trim(), password);
-    } catch (err: any) {
-      setError(err.message || 'Unable to create student account. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -172,7 +134,7 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
       await setupAccountWithToken(setupToken.trim(), newPassword);
       setSuccessNotice('Account successfully configured! Entering the portal...');
     } catch (err: any) {
-      setError(err.message || 'Invalid or expired setup token. Please request a new invite link.');
+      setError(err.message || 'Invalid or expired setup token. Please contact your administrator.');
     } finally {
       setLoading(false);
     }
@@ -210,34 +172,6 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
         </div>
 
         <div className="p-6">
-          {/* Student Sign In / Register Switcher (only shown outside /admin) */}
-          {!isAdminRoute && (mode === 'login' || mode === 'register') && (
-            <div className="grid grid-cols-2 gap-1 p-1 bg-slate-950 border border-slate-800 rounded-xl mb-5">
-              <button
-                type="button"
-                onClick={() => switchStudentMode('login')}
-                className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  mode === 'login'
-                    ? 'bg-blue-700 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                Student Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => switchStudentMode('register')}
-                className={`py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  mode === 'register'
-                    ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                Create Account
-              </button>
-            </div>
-          )}
-
           {/* Deactivation Banner */}
           {isDeactivated && (
             <div className="mb-5 p-4 rounded-xl bg-red-950/60 border border-red-800 text-red-200 text-sm flex items-start gap-3">
@@ -277,101 +211,6 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
           {successNotice && (
             <div className="mb-4 p-3 rounded-lg bg-emerald-950/50 border border-emerald-800 text-emerald-300 text-xs">
               {successNotice}
-            </div>
-          )}
-
-          {/* MODE: STUDENT REGISTRATION */}
-          {mode === 'register' && (
-            <div>
-              <div className="mb-4">
-                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-950/50 border border-amber-800/60 rounded px-2 py-0.5 mb-2">
-                  <UserPlus className="w-3.5 h-3.5" />
-                  New Student Enrollment
-                </div>
-                <h2 className="text-base font-bold text-white">Join the 1M Skill Challenge</h2>
-                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                  Create your student account to access modules, track progress, and earn your certificate.
-                </p>
-              </div>
-
-              <form onSubmit={handleRegisterSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Full Name
-                  </label>
-                  <div className="relative">
-                    <User className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-                    <input
-                      type="text"
-                      required
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      placeholder="e.g. Chinedu Okafor"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Email Address
-                  </label>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-                    <input
-                      type="email"
-                      required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="you@example.com"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Password (min. 8 characters)
-                  </label>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-                    <input
-                      type="password"
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••••••"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Confirm Password
-                  </label>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-                    <input
-                      type="password"
-                      required
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="••••••••••••"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full mt-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold py-2.5 px-4 rounded-lg text-sm transition-all shadow-lg shadow-amber-500/20 disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  {loading ? 'Creating Account...' : 'Create Student Account'}
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </form>
             </div>
           )}
 
@@ -473,7 +312,7 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
           {/* MODE: STUDENT LOGIN OR ADMIN PORTAL LOGIN */}
           {(mode === 'login' || mode === 'admin-login') && (
             <div>
-              <div className="mb-4">
+              <div className="mb-5">
                 {mode === 'admin-login' && (
                   <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-950/50 border border-amber-800/60 rounded px-2 py-0.5 mb-2">
                     <ShieldCheck className="w-3.5 h-3.5" />
@@ -481,12 +320,12 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
                   </div>
                 )}
                 <h2 className="text-base font-bold text-white">
-                  {mode === 'admin-login' ? 'Admin Dashboard Sign In' : 'Student Learning Portal'}
+                  {mode === 'admin-login' ? 'Admin Dashboard Sign In' : 'Student Portal Sign In'}
                 </h2>
                 <p className="text-xs text-slate-400 mt-1 leading-relaxed">
                   {mode === 'admin-login'
                     ? 'Sign in with your administrator credentials to manage students, curriculum, and cohorts.'
-                    : 'Sign in with your email and password to access your lessons and track progress.'}
+                    : 'Sign in using the email address and password assigned by your administrator.'}
                 </p>
               </div>
 
@@ -507,18 +346,7 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-medium text-slate-300">Password</label>
-                    {!isAdminRoute && (
-                      <button
-                        type="button"
-                        onClick={() => switchStudentMode('setup-token')}
-                        className="text-xs text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
-                      >
-                        Have an invite or reset token?
-                      </button>
-                    )}
-                  </div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Password</label>
                   <div className="relative">
                     <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
                     <input
@@ -546,59 +374,40 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
                 </button>
               </form>
 
-              <div className="mt-5 pt-4 border-t border-slate-800/80 text-center space-y-2">
-                {mode === 'admin-login' ? (
+              {mode === 'admin-login' ? (
+                <div className="mt-5 pt-4 border-t border-slate-800/80 text-center">
                   <a
                     href="/"
                     className="text-xs text-slate-400 hover:text-amber-300 transition-colors inline-block"
                   >
                     Back to Student Sign In
                   </a>
-                ) : (
-                  <p className="text-xs text-slate-400">
-                    New to the challenge?{' '}
-                    <button
-                      type="button"
-                      onClick={() => switchStudentMode('register')}
-                      className="text-amber-400 hover:text-amber-300 font-semibold cursor-pointer"
-                    >
-                      Create your student account
-                    </button>
+                </div>
+              ) : (
+                <div className="mt-5 pt-4 border-t border-slate-800/80 text-center">
+                  <p className="text-[11px] text-slate-400">
+                    Enrollment is managed by program administrators. Contact your instructor for account access.
                   </p>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* MODE: SETUP ACCOUNT WITH TOKEN / RESET PASSWORD */}
+          {/* MODE: SETUP ACCOUNT WITH ADMIN-PROVIDED LINK (?token=...) */}
           {mode === 'setup-token' && (
             <div>
               <div className="mb-4">
                 <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-950/50 border border-amber-800/60 rounded px-2 py-0.5 mb-2">
                   <KeyRound className="w-3.5 h-3.5" />
-                  Account Setup & Password Reset
+                  Account Password Setup
                 </div>
-                <h2 className="text-base font-bold text-white">Configure Your Secure Password</h2>
+                <h2 className="text-base font-bold text-white">Configure Your Password</h2>
                 <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                  Enter the invitation or reset token provided by your instructor, and choose your permanent password.
+                  Choose a permanent password for your enrolled student account.
                 </p>
               </div>
 
               <form onSubmit={handleSetupTokenSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Setup / Reset Token
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={setupToken}
-                    onChange={(e) => setSetupToken(e.target.value)}
-                    placeholder="Paste your invitation or reset token here"
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 font-mono text-xs"
-                  />
-                </div>
-
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1">
                     New Permanent Password (min. 8 characters)
@@ -645,10 +454,10 @@ export function AuthScreens({ initialMode = 'login', isAdminRoute = false }: Aut
                 <div className="text-center pt-2">
                   <button
                     type="button"
-                    onClick={() => switchStudentMode('login')}
+                    onClick={handleReturnToLogin}
                     className="text-xs text-slate-400 hover:text-slate-200 cursor-pointer"
                   >
-                    Back to Standard Sign In
+                    Back to Sign In
                   </button>
                 </div>
               </form>

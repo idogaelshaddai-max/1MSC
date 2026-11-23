@@ -72,93 +72,16 @@ app.get(
       dbHealthy: health.healthy,
       dbError: health.healthy ? undefined : health.error,
       sessionSecretConfigured: isSessionSecretConfigured(),
-      registrationEnabled: true,
+      registrationEnabled: false,
     });
   })
 );
 
-app.post(
-  '/api/auth/register',
-  asyncHandler(async (req, res) => {
-    const { fullName, email, password } = req.body || {};
-
-    if (!fullName || typeof fullName !== 'string' || !fullName.trim()) {
-      res.status(400).json({ error: 'Full name is required.' });
-      return;
-    }
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
-      res.status(400).json({ error: 'A valid email address is required.' });
-      return;
-    }
-    if (!password || typeof password !== 'string' || password.length < 8) {
-      res.status(400).json({ error: 'Password must be at least 8 characters long.' });
-      return;
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const existing = await db.getUserByEmail(normalizedEmail);
-    if (existing) {
-      res.status(409).json({
-        error: 'An account with this email already exists. Please sign in instead.',
-      });
-      return;
-    }
-
-    // Assign active default cohort if available (never allow client-supplied role)
-    let defaultCohortId: string | undefined;
-    let defaultCohortName: string | undefined;
-    try {
-      const cohorts = await db.getCohorts();
-      const activeCohort = cohorts.find((c) => c.status === 'active');
-      if (activeCohort) {
-        defaultCohortId = activeCohort.id;
-        defaultCohortName = activeCohort.name;
-      }
-    } catch {
-      // Proceed cleanly if cohorts table is optional
-    }
-
-    const now = new Date().toISOString();
-    const newStudent = await db.addUser({
-      id: crypto.randomUUID(),
-      email: normalizedEmail,
-      fullName: fullName.trim(),
-      role: 'student',
-      passwordHash: hashPassword(password),
-      isActive: true,
-      enrollmentDate: now,
-      xp: 0,
-      streakDays: 1,
-      lastActiveAt: now,
-      requiresPasswordChange: false,
-      badges: [],
-      cohort: defaultCohortName,
-      cohortId: defaultCohortId,
-      grantFullAccess: false,
-    });
-
-    await db.logAudit(
-      'STUDENT_REGISTERED',
-      newStudent.id,
-      `Student self-registered: ${newStudent.email} (${newStudent.fullName})`,
-      newStudent.id
-    );
-
-    const token = generateToken({
-      userId: newStudent.id,
-      role: 'student',
-      email: newStudent.email,
-    });
-
-    setSessionCookie(req, res, token);
-
-    res.status(201).json({
-      message: 'Account created successfully.',
-      token,
-      user: sanitizeUser(newStudent),
-    });
-  })
-);
+app.post('/api/auth/register', (_req, res) => {
+  res.status(403).json({
+    error: 'Public student registration is disabled. Student accounts must be created by an administrator.',
+  });
+});
 
 app.post(
   '/api/auth/first-admin-setup',
@@ -234,7 +157,7 @@ app.post(
 app.post(
   '/api/auth/login',
   asyncHandler(async (req, res) => {
-    const { email, password } = req.body || {};
+    const { email, password, portal } = req.body || {};
     if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
       res.status(400).json({ error: 'Email and password are required.' });
       return;
@@ -257,6 +180,13 @@ app.post(
     const valid = verifyPassword(password, user.passwordHash);
     if (!valid) {
       res.status(401).json({ error: 'Invalid email or password.' });
+      return;
+    }
+
+    if (portal === 'admin' && user.role !== 'admin') {
+      res.status(403).json({
+        error: 'Access denied. This portal is restricted to administrators. Students must sign in at /.',
+      });
       return;
     }
 
@@ -643,20 +573,45 @@ app.post(
   authenticate,
   requireAdmin,
   asyncHandler(async (req: AuthenticatedRequest, res) => {
-    const { fullName, email, cohort, cohortId } = req.body || {};
-    if (!fullName || !email) {
-      res.status(400).json({ error: 'Full name and email are required.' });
+    const { fullName, email, cohort, cohortId, temporaryPassword } = req.body || {};
+    if (!fullName || typeof fullName !== 'string' || !fullName.trim()) {
+      res.status(400).json({ error: 'Student full name is required.' });
+      return;
+    }
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
+      res.status(400).json({ error: 'A valid student email address is required.' });
       return;
     }
 
-    const normalized = String(email).trim().toLowerCase();
+    let finalTempPassword: string;
+    if (typeof temporaryPassword === 'string' && temporaryPassword.trim()) {
+      if (temporaryPassword.trim().length < 8) {
+        res.status(400).json({ error: 'Temporary password must be at least 8 characters long.' });
+        return;
+      }
+      finalTempPassword = temporaryPassword.trim();
+    } else {
+      finalTempPassword = generateTemporaryPassword();
+    }
+
+    const normalized = email.trim().toLowerCase();
     const existing = await db.getUserByEmail(normalized);
     if (existing) {
-      res.status(400).json({ error: 'A student or user with this email already exists.' });
+      res.status(409).json({ error: 'A student or user with this email already exists.' });
       return;
     }
 
-    const tempPassword = generateTemporaryPassword();
+    let resolvedCohortId = typeof cohortId === 'string' && cohortId.trim() ? cohortId.trim() : undefined;
+    let resolvedCohortName = typeof cohort === 'string' && cohort.trim() ? cohort.trim() : undefined;
+    if (resolvedCohortId) {
+      const cohortRecord = await db.getCohortById(resolvedCohortId);
+      if (cohortRecord) {
+        resolvedCohortName = cohortRecord.name;
+      } else {
+        resolvedCohortId = undefined;
+      }
+    }
+
     const inviteToken = generateInviteToken();
     const now = new Date();
     const expires = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -664,9 +619,9 @@ app.post(
     const newStudent = await db.addUser({
       id: crypto.randomUUID(),
       email: normalized,
-      fullName: String(fullName).trim(),
+      fullName: fullName.trim(),
       role: 'student',
-      passwordHash: hashPassword(tempPassword),
+      passwordHash: hashPassword(finalTempPassword),
       isActive: true,
       enrollmentDate: now.toISOString(),
       xp: 0,
@@ -676,30 +631,107 @@ app.post(
       inviteToken,
       inviteExpiresAt: expires,
       badges: [],
-      cohort: cohort ? String(cohort).trim() : undefined,
-      cohortId: typeof cohortId === 'string' && cohortId.trim() ? cohortId.trim() : undefined,
+      cohort: resolvedCohortName,
+      cohortId: resolvedCohortId,
+      grantFullAccess: false,
     });
 
     await db.logAudit(
-      'STUDENT_INVITED',
+      'STUDENT_CREATED',
       req.user!.id,
-      `Invited student ${newStudent.email} (${newStudent.fullName})`,
+      `Created student account ${newStudent.email} (${newStudent.fullName})`,
       newStudent.id
     );
 
-    res.json({
-      message: 'Student account provisioned successfully.',
+    res.status(201).json({
+      message: 'Student account created successfully.',
       student: {
-        id: newStudent.id,
-        email: newStudent.email,
-        fullName: newStudent.fullName,
-        role: newStudent.role,
-        isActive: newStudent.isActive,
-        enrollmentDate: newStudent.enrollmentDate,
+        ...sanitizeUser(newStudent),
+        cohortName: resolvedCohortName,
         inviteToken,
         inviteExpiresAt: expires,
-        temporaryPassword: tempPassword,
+        temporaryPassword: finalTempPassword,
       },
+    });
+  })
+);
+
+app.patch(
+  '/api/admin/students/:id',
+  authenticate,
+  requireAdmin,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const student = await db.getUserById(req.params.id);
+    if (!student) {
+      res.status(404).json({ error: 'Student not found.' });
+      return;
+    }
+    if (student.role === 'admin') {
+      res.status(400).json({ error: 'Administrator accounts cannot be edited through student management.' });
+      return;
+    }
+
+    const { fullName, email, cohortId, isActive } = req.body || {};
+    const updates: Record<string, any> = {};
+
+    if (fullName !== undefined) {
+      if (typeof fullName !== 'string' || !fullName.trim()) {
+        res.status(400).json({ error: 'Full name cannot be empty.' });
+        return;
+      }
+      updates.fullName = fullName.trim();
+    }
+
+    if (email !== undefined) {
+      if (typeof email !== 'string' || !email.includes('@')) {
+        res.status(400).json({ error: 'A valid email address is required.' });
+        return;
+      }
+      const normalized = email.trim().toLowerCase();
+      if (normalized !== student.email.toLowerCase()) {
+        const collision = await db.getUserByEmail(normalized);
+        if (collision && collision.id !== student.id) {
+          res.status(409).json({ error: 'Another account already uses this email address.' });
+          return;
+        }
+      }
+      updates.email = normalized;
+    }
+
+    if (cohortId !== undefined) {
+      if (cohortId === null || cohortId === '') {
+        updates.cohortId = undefined;
+        updates.cohort = undefined;
+      } else if (typeof cohortId === 'string') {
+        const cohortRecord = await db.getCohortById(cohortId.trim());
+        if (!cohortRecord) {
+          res.status(400).json({ error: 'Selected cohort does not exist.' });
+          return;
+        }
+        updates.cohortId = cohortRecord.id;
+        updates.cohort = cohortRecord.name;
+      }
+    }
+
+    if (isActive !== undefined) {
+      if (typeof isActive !== 'boolean') {
+        res.status(400).json({ error: 'isActive must be a boolean.' });
+        return;
+      }
+      updates.isActive = isActive;
+    }
+
+    const updated = await db.updateUser(student.id, updates);
+    await db.logAudit(
+      'STUDENT_UPDATED',
+      req.user!.id,
+      `Updated student account ${updated?.email || student.email}`,
+      student.id
+    );
+
+    res.json({
+      message: 'Student information updated successfully.',
+      student: updated ? sanitizeUser(updated) : undefined,
     });
   })
 );
@@ -742,6 +774,56 @@ app.patch(
 );
 
 app.post(
+  '/api/admin/students/:id/reset-password',
+  authenticate,
+  requireAdmin,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const student = await db.getUserById(req.params.id);
+    if (!student) {
+      res.status(404).json({ error: 'Student not found.' });
+      return;
+    }
+    if (student.role === 'admin') {
+      res.status(400).json({ error: 'Cannot reset an administrator password through this route.' });
+      return;
+    }
+
+    const { newPassword } = req.body || {};
+    let finalPassword: string;
+    if (typeof newPassword === 'string' && newPassword.trim()) {
+      if (newPassword.trim().length < 8) {
+        res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+        return;
+      }
+      finalPassword = newPassword.trim();
+    } else {
+      finalPassword = generateTemporaryPassword();
+    }
+
+    await db.updateUser(student.id, {
+      passwordHash: hashPassword(finalPassword),
+      requiresPasswordChange: true,
+      resetToken: undefined,
+      resetExpiresAt: undefined,
+    });
+
+    await db.logAudit(
+      'STUDENT_PASSWORD_RESET',
+      req.user!.id,
+      `Reset password directly for student ${student.email}`,
+      student.id
+    );
+
+    res.json({
+      message: 'Student temporary password has been reset successfully.',
+      email: student.email,
+      fullName: student.fullName,
+      temporaryPassword: finalPassword,
+    });
+  })
+);
+
+app.post(
   '/api/admin/students/:id/reset-link',
   authenticate,
   requireAdmin,
@@ -773,6 +855,41 @@ app.post(
       resetToken,
       expiresAt: expires,
       email: student.email,
+    });
+  })
+);
+
+app.delete(
+  '/api/admin/students/:id',
+  authenticate,
+  requireAdmin,
+  asyncHandler(async (req: AuthenticatedRequest, res) => {
+    const student = await db.getUserById(req.params.id);
+    if (!student) {
+      res.status(404).json({ error: 'Student not found.' });
+      return;
+    }
+    if (student.id === req.user!.id || student.role === 'admin') {
+      res.status(403).json({ error: 'Administrator accounts cannot be deleted.' });
+      return;
+    }
+
+    const result = await db.deleteUser(student.id);
+    if (!result) {
+      res.status(404).json({ error: 'Student not found.' });
+      return;
+    }
+
+    await db.logAudit(
+      'STUDENT_DELETED',
+      req.user!.id,
+      `Deleted student ${student.email} (${result.deletedProgressCount} progress records removed).`,
+      student.id
+    );
+
+    res.json({
+      message: `Student account "${student.fullName}" has been permanently deleted.`,
+      deletedProgressCount: result.deletedProgressCount,
     });
   })
 );

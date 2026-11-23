@@ -242,6 +242,11 @@ CREATE TRIGGER trg_users_updated_at
   BEFORE UPDATE ON public.users
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
+DROP TRIGGER IF EXISTS trg_cohorts_updated_at ON public.cohorts;
+CREATE TRIGGER trg_cohorts_updated_at
+  BEFORE UPDATE ON public.cohorts
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
 DROP TRIGGER IF EXISTS trg_course_modules_updated_at ON public.course_modules;
 CREATE TRIGGER trg_course_modules_updated_at
   BEFORE UPDATE ON public.course_modules
@@ -290,6 +295,7 @@ CREATE TRIGGER trg_course_settings_updated_at
 -- Enabling RLS + column restrictions protects direct PostgREST / anon-key access.
 
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cohorts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.course_modules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.lessons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.lesson_progress ENABLE ROW LEVEL SECURITY;
@@ -361,6 +367,18 @@ CREATE POLICY users_select_self_or_admin ON public.users
 
 DROP POLICY IF EXISTS users_admin_all ON public.users;
 CREATE POLICY users_admin_all ON public.users
+  FOR ALL TO authenticated
+  USING (public.is_app_admin())
+  WITH CHECK (public.is_app_admin());
+
+-- Cohorts policies
+DROP POLICY IF EXISTS cohorts_student_read ON public.cohorts;
+CREATE POLICY cohorts_student_read ON public.cohorts
+  FOR SELECT TO authenticated
+  USING (public.is_active_app_user() OR public.is_app_admin());
+
+DROP POLICY IF EXISTS cohorts_admin_write ON public.cohorts;
+CREATE POLICY cohorts_admin_write ON public.cohorts
   FOR ALL TO authenticated
   USING (public.is_app_admin())
   WITH CHECK (public.is_app_admin());

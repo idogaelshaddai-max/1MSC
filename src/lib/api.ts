@@ -51,9 +51,7 @@ export const api = {
   getSystemStatus: () => fetchWithAuth('/api/system/status'),
   setupFirstAdmin: (data: { fullName: string; email: string; password: string }) =>
     fetchWithAuth('/api/auth/first-admin-setup', { method: 'POST', body: JSON.stringify(data) }),
-  register: (data: { fullName: string; email: string; password: string }) =>
-    fetchWithAuth('/api/auth/register', { method: 'POST', body: JSON.stringify(data) }),
-  login: (data: { email: string; password: string }) =>
+  login: (data: { email: string; password: string; portal?: 'admin' | 'student' }) =>
     fetchWithAuth('/api/auth/login', { method: 'POST', body: JSON.stringify(data) }),
   logout: () => fetchWithAuth('/api/auth/logout', { method: 'POST' }),
   getMe: (): Promise<StudentProfileSummary> => fetchWithAuth('/api/auth/me'),
@@ -87,15 +85,29 @@ export const api = {
   // Admin
   getAdminOverview: (): Promise<AdminOverviewStats> => fetchWithAuth('/api/admin/overview'),
   getAdminStudents: (): Promise<StudentProfileSummary[]> => fetchWithAuth('/api/admin/students'),
-  createStudent: (data: { fullName: string; email: string; cohort?: string }) =>
-    fetchWithAuth('/api/admin/students', { method: 'POST', body: JSON.stringify(data) }),
+  createStudent: (data: {
+    fullName: string;
+    email: string;
+    temporaryPassword?: string;
+    cohortId?: string;
+  }) => fetchWithAuth('/api/admin/students', { method: 'POST', body: JSON.stringify(data) }),
+  updateStudent: (
+    id: string,
+    data: { fullName?: string; email?: string; cohortId?: string | null; isActive?: boolean }
+  ) => fetchWithAuth(`/api/admin/students/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   toggleStudentStatus: (id: string, isActive: boolean) =>
     fetchWithAuth(`/api/admin/students/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ isActive }),
     }),
+  resetStudentPassword: (id: string, newPassword?: string) =>
+    fetchWithAuth(`/api/admin/students/${id}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ newPassword }),
+    }),
   generateStudentResetLink: (id: string) =>
     fetchWithAuth(`/api/admin/students/${id}/reset-link`, { method: 'POST' }),
+  deleteStudent: (id: string) => fetchWithAuth(`/api/admin/students/${id}`, { method: 'DELETE' }),
 
   // Curriculum Modules
   getAdminModules: (): Promise<CourseModule[]> => fetchWithAuth('/api/admin/modules'),

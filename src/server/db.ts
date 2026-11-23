@@ -536,19 +536,24 @@ export class Database {
   }
 
   private async ensureSupabaseInitialized(client: SupabaseClient): Promise<void> {
-    const { data: settingsRow, error: settingsErr } = await client
-      .from('course_settings')
-      .select('id')
-      .eq('id', 1)
-      .maybeSingle();
+    const [settingsCheck, cohortsCheck] = await Promise.all([
+      client.from('course_settings').select('id').eq('id', 1).maybeSingle(),
+      client.from('cohorts').select('id').limit(1),
+    ]);
 
-    if (settingsErr) {
+    if (settingsCheck.error) {
       throw new Error(
-        `Supabase schema/permission check failed (${settingsErr.message}). Run /supabase/schema.sql (including the GRANT statements) in Supabase SQL Editor and verify SUPABASE_SERVICE_ROLE_KEY is your private Secret key.`
+        `Supabase schema/permission check failed (${settingsCheck.error.message}). Run /supabase/schema.sql (including the GRANT statements) in Supabase SQL Editor and verify SUPABASE_SERVICE_ROLE_KEY is your private Secret key.`
       );
     }
 
-    if (settingsRow) {
+    if (cohortsCheck.error && IS_STRICT_PRODUCTION) {
+      throw new Error(
+        `Supabase table "public.cohorts" is missing or inaccessible (${cohortsCheck.error.message}). Run /supabase/schema.sql in Supabase SQL Editor.`
+      );
+    }
+
+    if (settingsCheck.data) {
       return;
     }
 
@@ -1060,6 +1065,57 @@ export class Database {
     local.users[idx] = { ...local.users[idx], ...updates };
     this.saveLocalData();
     return local.users[idx];
+  }
+
+  public async deleteUser(
+    id: string
+  ): Promise<{ deletedUser: User; deletedProgressCount: number } | undefined> {
+    const existing = await this.getUserById(id);
+    if (!existing) return undefined;
+    if (existing.role === 'admin') {
+      throw new Error('Administrator accounts cannot be deleted.');
+    }
+
+    const supabase = await this.getSupabase();
+    if (supabase) {
+      const { count: progressCount, error: countErr } = await supabase
+        .from('lesson_progress')
+        .select('id', { count: 'exact', head: true })
+        .eq('student_id', id);
+      throwIfSupabaseError(countErr, 'countUserProgress');
+
+      const { error: progErr } = await supabase
+        .from('lesson_progress')
+        .delete()
+        .eq('student_id', id);
+      throwIfSupabaseError(progErr, 'deleteUserProgress');
+
+      const { error: userErr } = await supabase.from('users').delete().eq('id', id);
+      throwIfSupabaseError(userErr, 'deleteUser');
+
+      if (!IS_STRICT_PRODUCTION && fs.existsSync(DB_FILE)) {
+        const local = this.getLocalData();
+        local.progress = local.progress.filter((p) => p.studentId !== id);
+        local.users = local.users.filter((u) => u.id !== id);
+        this.saveLocalData();
+      }
+
+      return {
+        deletedUser: existing,
+        deletedProgressCount: progressCount ?? 0,
+      };
+    }
+
+    const local = this.getLocalData();
+    const beforeProgress = local.progress.length;
+    local.progress = local.progress.filter((p) => p.studentId !== id);
+    const deletedProgressCount = beforeProgress - local.progress.length;
+    local.users = local.users.filter((u) => u.id !== id);
+    this.saveLocalData();
+    return {
+      deletedUser: existing,
+      deletedProgressCount,
+    };
   }
 
   public async logAudit(action: string, actorId: string, details: string, targetId?: string): Promise<void> {
@@ -2084,6 +2140,8 @@ export class Database {
       };
     }
 
+    const cohortInfo = user.cohortId ? await this.getCohortById(user.cohortId) : undefined;
+
     const studentSummary: StudentProfileSummary = {
       id: user.id,
       email: user.email,
@@ -2096,8 +2154,9 @@ export class Database {
       lastActiveAt: user.lastActiveAt,
       requiresPasswordChange: user.requiresPasswordChange || false,
       badges: user.badges || [],
-      cohort: user.cohort,
+      cohort: cohortInfo?.name || user.cohort,
       cohortId: user.cohortId,
+      cohortName: cohortInfo?.name,
       grantFullAccess: Boolean(user.grantFullAccess),
       completedLessonCount: completedLessons,
       completedRequiredCount: completedRequiredLessons,
@@ -2584,34 +2643,23 @@ export class Database {
   public async getCohorts(): Promise<Cohort[]> {
     const supabase = await this.getSupabase();
     if (supabase) {
-      try {
-        const { data, error } = await supabase.from('cohorts').select('*').order('start_date', { ascending: true });
-        if (error) {
-          if (
-            error.message?.includes('schema cache') ||
-            error.message?.includes('does not exist') ||
-            error.code === 'PGRST205' ||
-            error.code === '42P01'
-          ) {
-            console.warn('[Supabase Notice] Table public.cohorts not in schema cache. Using local data fallback.');
-            return this.getLocalData().cohorts || DEFAULT_COHORTS;
-          }
-          throwIfSupabaseError(error, 'getCohorts');
-        }
-        return (data || []).map(mapRowToCohort);
-      } catch (err: any) {
-        if (
-          err?.message?.includes('schema cache') ||
-          err?.message?.includes('does not exist') ||
-          err?.code === 'PGRST205' ||
-          err?.code === '42P01' ||
-          err?.message?.includes('cohorts')
-        ) {
-          console.warn('[Supabase Notice] cohorts query error, using local fallback:', err.message);
+      const { data, error } = await supabase
+        .from('cohorts')
+        .select('*')
+        .order('start_date', { ascending: true });
+      if (error) {
+        const missingCohortsTable =
+          error.message?.includes('schema cache') ||
+          error.message?.includes('does not exist') ||
+          error.code === 'PGRST205' ||
+          error.code === '42P01';
+        if (missingCohortsTable && !IS_STRICT_PRODUCTION) {
+          console.warn('[Supabase Notice] Table public.cohorts not in schema cache. Using local dev fallback.');
           return this.getLocalData().cohorts || DEFAULT_COHORTS;
         }
-        throw err;
+        throwIfSupabaseError(error, 'getCohorts');
       }
+      return (data || []).map(mapRowToCohort);
     }
     return this.getLocalData().cohorts || DEFAULT_COHORTS;
   }
@@ -2619,23 +2667,19 @@ export class Database {
   public async getCohortById(id: string): Promise<Cohort | undefined> {
     const supabase = await this.getSupabase();
     if (supabase) {
-      try {
-        const { data, error } = await supabase.from('cohorts').select('*').eq('id', id).maybeSingle();
-        if (error) {
-          if (
-            error.message?.includes('schema cache') ||
-            error.message?.includes('does not exist') ||
-            error.code === 'PGRST205' ||
-            error.code === '42P01'
-          ) {
-            return (this.getLocalData().cohorts || DEFAULT_COHORTS).find((c) => c.id === id);
-          }
-          throwIfSupabaseError(error, 'getCohortById');
+      const { data, error } = await supabase.from('cohorts').select('*').eq('id', id).maybeSingle();
+      if (error) {
+        const missingCohortsTable =
+          error.message?.includes('schema cache') ||
+          error.message?.includes('does not exist') ||
+          error.code === 'PGRST205' ||
+          error.code === '42P01';
+        if (missingCohortsTable && !IS_STRICT_PRODUCTION) {
+          return (this.getLocalData().cohorts || DEFAULT_COHORTS).find((c) => c.id === id);
         }
-        return data ? mapRowToCohort(data) : undefined;
-      } catch (err: any) {
-        return (this.getLocalData().cohorts || DEFAULT_COHORTS).find((c) => c.id === id);
+        throwIfSupabaseError(error, 'getCohortById');
       }
+      return data ? mapRowToCohort(data) : undefined;
     }
     return (this.getLocalData().cohorts || DEFAULT_COHORTS).find((c) => c.id === id);
   }
@@ -2650,49 +2694,23 @@ export class Database {
     };
     const supabase = await this.getSupabase();
     if (supabase) {
-      try {
-        const { data: inserted, error } = await supabase
-          .from('cohorts')
-          .insert({
-            id: newCohort.id,
-            name: newCohort.name,
-            start_date: newCohort.startDate,
-            end_date: newCohort.endDate,
-            status: newCohort.status,
-            release_schedule_type: newCohort.releaseScheduleType,
-            release_delay_weeks: newCohort.releaseDelayWeeks,
-            created_at: newCohort.createdAt,
-            updated_at: newCohort.updatedAt,
-          })
-          .select('*')
-          .single();
-        if (error) {
-          if (
-            error.message?.includes('schema cache') ||
-            error.message?.includes('does not exist') ||
-            error.code === 'PGRST205' ||
-            error.code === '42P01'
-          ) {
-            console.warn('[Supabase Notice] Table cohorts missing in Supabase, saved locally.');
-            const local = this.getLocalData();
-            if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
-            local.cohorts.push(newCohort);
-            this.saveLocalData();
-            return newCohort;
-          }
-          throwIfSupabaseError(error, 'createCohort');
-        }
-        return mapRowToCohort(inserted);
-      } catch (err: any) {
-        if (err?.message?.includes('schema cache') || err?.message?.includes('does not exist')) {
-          const local = this.getLocalData();
-          if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
-          local.cohorts.push(newCohort);
-          this.saveLocalData();
-          return newCohort;
-        }
-        throw err;
-      }
+      const { data: inserted, error } = await supabase
+        .from('cohorts')
+        .insert({
+          id: newCohort.id,
+          name: newCohort.name,
+          start_date: newCohort.startDate,
+          end_date: newCohort.endDate,
+          status: newCohort.status,
+          release_schedule_type: newCohort.releaseScheduleType,
+          release_delay_weeks: newCohort.releaseDelayWeeks,
+          created_at: newCohort.createdAt,
+          updated_at: newCohort.updatedAt,
+        })
+        .select('*')
+        .single();
+      throwIfSupabaseError(error, 'createCohort');
+      return mapRowToCohort(inserted);
     }
     const local = this.getLocalData();
     if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
@@ -2713,43 +2731,14 @@ export class Database {
       if (updates.releaseScheduleType !== undefined) rowUpdates.release_schedule_type = updates.releaseScheduleType;
       if (updates.releaseDelayWeeks !== undefined) rowUpdates.release_delay_weeks = updates.releaseDelayWeeks;
 
-      try {
-        const { data, error } = await supabase
-          .from('cohorts')
-          .update(rowUpdates)
-          .eq('id', id)
-          .select('*')
-          .maybeSingle();
-        if (error) {
-          if (
-            error.message?.includes('schema cache') ||
-            error.message?.includes('does not exist') ||
-            error.code === 'PGRST205' ||
-            error.code === '42P01'
-          ) {
-            const local = this.getLocalData();
-            if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
-            const idx = local.cohorts.findIndex((c) => c.id === id);
-            if (idx === -1) return undefined;
-            local.cohorts[idx] = { ...local.cohorts[idx], ...updates, updatedAt: now };
-            this.saveLocalData();
-            return local.cohorts[idx];
-          }
-          throwIfSupabaseError(error, 'updateCohort');
-        }
-        return data ? mapRowToCohort(data) : undefined;
-      } catch (err: any) {
-        if (err?.message?.includes('schema cache') || err?.message?.includes('does not exist')) {
-          const local = this.getLocalData();
-          if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
-          const idx = local.cohorts.findIndex((c) => c.id === id);
-          if (idx === -1) return undefined;
-          local.cohorts[idx] = { ...local.cohorts[idx], ...updates, updatedAt: now };
-          this.saveLocalData();
-          return local.cohorts[idx];
-        }
-        throw err;
-      }
+      const { data, error } = await supabase
+        .from('cohorts')
+        .update(rowUpdates)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      throwIfSupabaseError(error, 'updateCohort');
+      return data ? mapRowToCohort(data) : undefined;
     }
     const local = this.getLocalData();
     if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
@@ -2767,33 +2756,9 @@ export class Database {
   public async deleteCohort(id: string): Promise<boolean> {
     const supabase = await this.getSupabase();
     if (supabase) {
-      try {
-        const { error } = await supabase.from('cohorts').delete().eq('id', id);
-        if (error) {
-          if (
-            error.message?.includes('schema cache') ||
-            error.message?.includes('does not exist') ||
-            error.code === 'PGRST205' ||
-            error.code === '42P01'
-          ) {
-            const local = this.getLocalData();
-            if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
-            const initialLen = local.cohorts.length;
-            local.cohorts = local.cohorts.filter((c) => c.id !== id);
-            this.saveLocalData();
-            return local.cohorts.length < initialLen;
-          }
-          throwIfSupabaseError(error, 'deleteCohort');
-        }
-        return true;
-      } catch (err: any) {
-        const local = this.getLocalData();
-        if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
-        const initialLen = local.cohorts.length;
-        local.cohorts = local.cohorts.filter((c) => c.id !== id);
-        this.saveLocalData();
-        return local.cohorts.length < initialLen;
-      }
+      const { error } = await supabase.from('cohorts').delete().eq('id', id);
+      throwIfSupabaseError(error, 'deleteCohort');
+      return true;
     }
     const local = this.getLocalData();
     if (!local.cohorts) local.cohorts = [...DEFAULT_COHORTS];
@@ -2804,7 +2769,14 @@ export class Database {
   }
 
   public async assignStudentCohort(studentId: string, cohortId: string | null): Promise<User | undefined> {
-    return this.updateUser(studentId, { cohortId: cohortId || undefined });
+    if (!cohortId) {
+      return this.updateUser(studentId, { cohortId: undefined, cohort: undefined });
+    }
+    const cohort = await this.getCohortById(cohortId);
+    return this.updateUser(studentId, {
+      cohortId,
+      cohort: cohort?.name,
+    });
   }
 
   public async toggleStudentFullAccess(studentId: string, grantFullAccess: boolean): Promise<User | undefined> {

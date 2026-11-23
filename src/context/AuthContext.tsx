@@ -20,8 +20,7 @@ interface AuthContextType {
   isDeactivated: boolean;
   systemStatus: SystemStatus | null;
   checkSystemStatus: () => Promise<void>;
-  register: (fullName: string, email: string, password: string) => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, portal?: 'admin' | 'student') => Promise<void>;
   setupFirstAdmin: (fullName: string, email: string, password: string) => Promise<void>;
   setupAccountWithToken: (token: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -77,18 +76,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     init();
   }, [checkSystemStatus, refreshUser]);
 
-  const register = async (fullName: string, email: string, password: string) => {
-    setIsDeactivated(false);
-    setDeactivationMessage(null);
-    const res = await api.register({ fullName, email, password });
-    setUser(res.user);
-  };
-
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, portal: 'admin' | 'student' = 'student') => {
     setIsDeactivated(false);
     setDeactivationMessage(null);
     try {
-      const res = await api.login({ email, password });
+      const res = await api.login({ email, password, portal });
       setUser(res.user);
     } catch (err: any) {
       if (err.deactivated) {
@@ -140,7 +132,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isDeactivated,
         systemStatus,
         checkSystemStatus,
-        register,
         login,
         setupFirstAdmin,
         setupAccountWithToken,

@@ -205,6 +205,18 @@ function MainApp() {
     }
   }, [user, fetchDashboardStats]);
 
+  // Normalize /register to / when unauthenticated (public registration disabled)
+  useEffect(() => {
+    if (!isLoading && !user && pathname === '/register') {
+      try {
+        window.history.replaceState(null, '', '/');
+      } catch {
+        // Ignore history errors
+      }
+      setPathname('/');
+    }
+  }, [isLoading, user, pathname]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 space-y-3">
@@ -219,8 +231,7 @@ function MainApp() {
   // Not signed in
   if (!user) {
     const isAdminRoute = pathname.startsWith('/admin');
-    const initialMode =
-      isAdminRoute ? 'admin' : pathname === '/register' ? 'register' : 'login';
+    const initialMode = isAdminRoute ? 'admin' : 'login';
     return <AuthScreens initialMode={initialMode} isAdminRoute={isAdminRoute} />;
   }
 
